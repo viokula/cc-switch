@@ -1778,7 +1778,7 @@ impl RequestForwarder {
                 "/chat/completions" | "/responses" | "/responses/compact"
             );
 
-        let url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
+        let mut url = if matches!(resolved_claude_api_format.as_deref(), Some("gemini_native")) {
             super::gemini_url::resolve_gemini_native_url(
                 &base_url,
                 &effective_endpoint,
@@ -1808,6 +1808,13 @@ impl RequestForwarder {
         } else {
             adapter.build_url(&base_url, &effective_endpoint)
         };
+
+        // 供应商钩子：URL 定稿前改写（例如华为 CodeAgent 剥离 `/v1` 前缀）。
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(hook) = crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                hook.on_build_url(meta, &mut url);
+            }
+        }
 
         // 记录映射后的出站模型名（此时 mapped_body 已完成接管映射 / [1m] 剥离 /
         // Copilot 归一化）。格式转换后若 body 仍带 model 字段会在下方刷新覆盖；
@@ -2100,7 +2107,14 @@ impl RequestForwarder {
         // 获取认证头（提前准备，用于内联替换），同时保留仅用于日志脱敏的
         // 精确认证材料。实际日志永远不输出这些值。
         let mut log_secrets: Vec<String> = Vec::new();
-        let mut auth_headers = if let Some(mut auth) = adapter.extract_auth(provider) {
+        let hook = provider
+            .meta
+            .as_ref()
+            .and_then(|meta| crate::proxy::hooks::HookRegistry::global().find_for(meta));
+        let mut auth_headers = if let Some(mut auth) = adapter
+            .extract_auth(provider)
+            .filter(|_| !hook.is_some_and(|hook| hook.skip_auth_token() || hook.is_managed_auth()))
+        {
             // GitHub Copilot 特殊处理：从 CopilotAuthManager 获取真实 token
             if auth.strategy == AuthStrategy::GitHubCopilot {
                 if let Some(app_handle) = &self.app_handle {
@@ -2658,6 +2672,13 @@ impl RequestForwarder {
             ordered_headers.insert(name, value);
         }
 
+        // 供应商钩子：请求体定稿前改写（例如华为 CodeAgent 指纹替换）。
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(hook) = crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                hook.on_request_body(&mut filtered_body, meta);
+            }
+        }
+
         // 序列化请求体。GET/HEAD 是 idempotent/safe 方法，按 HTTP 语义不应携带 body；
         // 强行附带 JSON body 会让某些上游（如 Google Gemini 的 models.list）拒绝请求。
         let body_bytes = if matches!(method, &http::Method::GET | &http::Method::HEAD) {
@@ -2689,6 +2710,29 @@ impl RequestForwarder {
         if let Some(ref account_id) = codex_oauth_account_id {
             if let Ok(value) = http::HeaderValue::from_str(account_id) {
                 ordered_headers.insert("chatgpt-account-id", value);
+            }
+        }
+
+        // 供应商钩子：出站头过滤 + 托管认证头注入。
+        // 先过滤（白名单模式会剔除客户端带进来的无关头），再注入认证头，
+        // 保证注入的认证头不会被白名单过滤掉。
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(hook) = crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                hook.filter_outbound_headers(meta, &mut ordered_headers);
+                let extra_auth = hook
+                    .on_auth_headers(meta, self.app_handle.as_ref(), Some(&filtered_body))
+                    .await?;
+                for (name, value) in extra_auth {
+                    match (
+                        http::HeaderName::from_bytes(name.as_bytes()),
+                        http::HeaderValue::from_str(&value),
+                    ) {
+                        (Ok(header_name), Ok(header_value)) => {
+                            ordered_headers.insert(header_name, header_value);
+                        }
+                        _ => log::warn!("[ProxyHook] 忽略非法认证头: {name}"),
+                    }
+                }
             }
         }
 
@@ -2748,7 +2792,15 @@ impl RequestForwarder {
             log::debug!(
                 "[Forwarder] Using pooled reqwest client (preserve_exact_header_case={preserve_exact_header_case}, socks_proxy={is_socks_proxy})"
             );
-            let client = super::http_client::get_for_url(&url);
+            let client = match provider.meta.as_ref() {
+                Some(meta) => match crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                    Some(hook) if hook.skip_tls_verify(meta) => {
+                        super::http_client::get_for_url_insecure(&url)
+                    }
+                    _ => super::http_client::get_for_url(&url),
+                },
+                None => super::http_client::get_for_url(&url),
+            };
             let mut request = client.request(method.clone(), &url);
             if request_is_streaming {
                 // reqwest 的 timeout 是整请求超时；流式请求交给 response_processor
@@ -2841,6 +2893,29 @@ impl RequestForwarder {
                     .hold_encrypted_agent_task_stream(response, &filtered_body)
                     .await?;
             }
+            if !request_is_streaming || response.is_json() {
+                if let (Some(hook), Some(meta)) = (hook, provider.meta.as_ref()) {
+                    let status = response.status();
+                    let mut headers = response.headers().clone();
+                    let encoding = get_content_encoding(&headers);
+                    let raw = response.bytes_with_limit(MAX_RESPONSE_BODY_BYTES).await?;
+                    let decoded = encoding.as_deref().and_then(|encoding| {
+                        decompress_body_with_limit(encoding, &raw, MAX_RESPONSE_BODY_BYTES)
+                            .ok()
+                            .flatten()
+                    });
+                    let body = match hook.on_response_body(meta, decoded.as_deref().unwrap_or(&raw))
+                    {
+                        Some(body) => {
+                            headers.remove(http::header::CONTENT_ENCODING);
+                            headers.remove(http::header::CONTENT_LENGTH);
+                            body.into()
+                        }
+                        None => raw,
+                    };
+                    response = ProxyResponse::buffered(status, headers, body);
+                }
+            }
             Ok((response, resolved_claude_api_format, outbound_model))
         } else {
             let status_code = status.as_u16();
@@ -2861,6 +2936,19 @@ impl RequestForwarder {
                 None => raw.to_vec(),
             };
             let body_text = String::from_utf8(decoded).ok();
+
+            // 供应商钩子：把非标准上游错误响应转换成统一的 ProxyError。
+            if let Some(text) = body_text.as_deref() {
+                if let Some(meta) = provider.meta.as_ref() {
+                    if let Some(hook) = crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+                            if let Some(error) = hook.transform_upstream_error(meta, &value) {
+                                return Err(error);
+                            }
+                        }
+                    }
+                }
+            }
 
             Err(ProxyError::UpstreamError {
                 status: status_code,
@@ -3163,6 +3251,15 @@ impl RequestForwarder {
         body: &Value,
         is_copilot: bool,
     ) -> String {
+        // 供应商钩子：部分供应商强制使用特定上游格式（例如华为 CodeAgent 走 openai_chat）。
+        if let Some(meta) = provider.meta.as_ref() {
+            if let Some(hook) = crate::proxy::hooks::HookRegistry::global().find_for(meta) {
+                if let Some(forced) = hook.force_api_format(meta) {
+                    return forced;
+                }
+            }
+        }
+
         if !is_copilot {
             return super::providers::get_claude_api_format(provider).to_string();
         }

@@ -84,6 +84,8 @@ import { Label } from "@/components/ui/label";
 import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { BasicFormFields } from "./BasicFormFields";
 import { ClaudeFormFields } from "./ClaudeFormFields";
+import { getFormExtension } from "@/config/formExtensions";
+import { isHuaweiProviderType } from "@/huawei/constants";
 import type { DirectModeFormatNotice } from "./shared";
 import {
   claudeStackModelsFromEnv,
@@ -993,6 +995,25 @@ function ProviderFormFull({
     onConfigChange: handleSettingsConfigChange,
   });
 
+  const extension =
+    appId === "claude"
+      ? getFormExtension(templatePreset?.providerType ?? initialProviderType)
+      : undefined;
+  const [selectedExtensionAccountId, setSelectedExtensionAccountId] = useState<
+    string | null
+  >(() => initialData?.meta?.selectedAccountId ?? null);
+  useEffect(() => {
+    setSelectedExtensionAccountId(
+      extension?.providerType === initialProviderType
+        ? (initialData?.meta?.selectedAccountId ?? null)
+        : null,
+    );
+  }, [
+    extension?.providerType,
+    initialProviderType,
+    initialData?.meta?.selectedAccountId,
+  ]);
+
   const {
     geminiEnv,
     geminiConfig,
@@ -1592,6 +1613,7 @@ function ProviderFormFull({
         if (
           !isCopilotProvider &&
           !isClaudeCodexOauthProvider &&
+          !extension?.skipApiKeyRequired &&
           !isXaiOauthProvider &&
           !apiKey.trim()
         ) {
@@ -1900,13 +1922,34 @@ function ProviderFormFull({
       delete baseMeta.custom_endpoints;
     }
 
+    const presetDeclaredProviderType =
+      (selectedPresetEntry?.preset as { providerType?: string } | undefined)
+        ?.providerType ?? initialProviderType;
+    // 只有注册了表单扩展的供应商（如华为 CodeAgent）才把预设的 providerType
+    // 写进 meta；原生供应商沿用既有的识别逻辑，避免给普通卡片打上 oauth 标记。
+    const extensionDeclaredProviderType =
+      presetDeclaredProviderType && getFormExtension(presetDeclaredProviderType)
+        ? presetDeclaredProviderType
+        : undefined;
     const providerType = isCopilotProvider
       ? "github_copilot"
       : isClaudeCodexOauthProvider || isCodexOfficialManagedOauthBound
         ? "codex_oauth"
         : isXaiOauthProvider
           ? "xai_oauth"
-          : undefined;
+          : extensionDeclaredProviderType;
+
+    // 扩展供应商在 CLI 路径写入 appTarget="claude"（顶层 key，后端 #[serde(flatten)]
+    // 收入 meta.extra["appTarget"]）。后端 on_takeover 据此启动连通性代理；
+    // Desktop 表单覆盖为 "claude_desktop"。
+    const presetDeclaredAppTarget = (
+      selectedPresetEntry?.preset as
+        | { appTarget?: "claude" | "claude_desktop" }
+        | undefined
+    )?.appTarget;
+    const appTarget = isHuaweiProviderType(providerType)
+      ? (presetDeclaredAppTarget ?? "claude")
+      : undefined;
 
     // 动过列表才存；清空了存空列表（什么都不发布），和没配（跟着映射）区分开。
     const stackModels =
@@ -1915,6 +1958,7 @@ function ProviderFormFull({
         : undefined;
 
     const nextMeta: ProviderMeta = {
+      ...(extension?.defaultMetaFields ?? {}),
       ...(baseMeta ?? {}),
       opencodeConfigFormat: isNativeOpencode ? "v2" : undefined,
       // Claude Code、Codex、Gemini CLI 的通用配置片段已冻结：沿用行里原有的标记，新增时
@@ -1927,6 +1971,11 @@ function ProviderFormFull({
       claudeDesktopMode: undefined,
       // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
       providerType,
+      selectedAccountId: extension
+        ? (selectedExtensionAccountId ?? undefined)
+        : undefined,
+      // 扩展供应商 CLI 路径写入 appTarget（顶层 key，后端收入 meta.extra["appTarget"]）
+      appTarget: appTarget ?? undefined,
       authBinding: isCopilotProvider
         ? {
             source: "managed_account",
@@ -2631,7 +2680,8 @@ function ProviderFormFull({
                 templatePreset?.requiresOAuth === true ||
                 isCopilotProvider ||
                 isClaudeCodexOauthProvider ||
-                isXaiOauthProvider
+                isXaiOauthProvider ||
+                extension?.skipApiKeyRequired === true
               }
               isCopilotAuthenticated={isCopilotAuthenticated}
               selectedGitHubAccountId={selectedGitHubAccountId}
@@ -2642,6 +2692,10 @@ function ProviderFormFull({
               onCodexAccountSelect={setSelectedCodexAccountId}
               codexFastMode={codexFastMode}
               onCodexFastModeChange={setCodexFastMode}
+              extensionAuthSection={extension?.AuthSection}
+              extensionFetchModels={extension?.fetchModels}
+              selectedExtensionAccountId={selectedExtensionAccountId}
+              onExtensionAccountSelect={setSelectedExtensionAccountId}
               isXaiOauthAuthenticated={isXaiOauthAuthenticated}
               selectedXaiAccountId={selectedXaiAccountId}
               onXaiAccountSelect={setSelectedXaiAccountId}

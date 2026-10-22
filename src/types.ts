@@ -172,6 +172,20 @@ export interface LocalProxyRequestOverrides {
   body?: Record<string, unknown>;
 }
 
+// 扩展供应商：注入到上游请求的额外认证头
+export interface ExtraAuthHeader {
+  name: string;
+  value?: string;
+  tokenSource?: string;
+  valuePrefix?: string;
+}
+
+// 扩展供应商：请求/响应体指纹替换规则
+export interface FingerprintReplacement {
+  from: string;
+  to: string;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -240,6 +254,18 @@ export interface ProviderMeta {
   githubAccountId?: string;
   // Stack 模式下这家 Claude Code 供应商发布的模型；没有时按模型映射发布，空列表什么都不发布
   stackModels?: ClaudeStackModel[];
+  // 供应商目标应用（扩展供应商使用）：CLI 表单写 "claude"，Desktop 表单写 "claude_desktop"
+  appTarget?: "claude" | "claude_desktop";
+  // 扩展供应商代理行为（后端按 #[serde(flatten)] 收入 meta.extra 读取）
+  skipTlsVerify?: boolean;
+  stripPathPrefix?: string;
+  headerMode?: "passthrough" | "whitelist";
+  allowedHeaders?: string[];
+  errorFormat?: "passthrough" | "to_anthropic";
+  extraAuthHeaders?: ExtraAuthHeader[];
+  fingerprintReplacements?: FingerprintReplacement[];
+  // 扩展供应商选中的托管账号 ID
+  selectedAccountId?: string;
 }
 
 // Stack 模式下 Claude Code 供应商发布的一个模型

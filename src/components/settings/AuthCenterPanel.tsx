@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react";
+import { Suspense, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
 import { XaiOAuthSection } from "@/components/providers/forms/XaiOAuthSection";
 import { AgyOAuthSection } from "@/components/providers/forms/AgyOAuthSection";
 import { isMac } from "@/lib/platform";
+import { getAuthCenterSections } from "@/config/authCenterRegistry";
 import type { ManagedAuthProvider } from "@/lib/api";
 
 interface AuthCenterPanelProps {
@@ -79,6 +80,13 @@ export function AuthCenterPanel({
           <AgyOAuthSection helpSide="top" />
         </div>
       )}
+      {getAuthCenterSections().map(({ id, Component }) => (
+        <div key={id} className="scroll-mt-4">
+          <Suspense fallback={null}>
+            <Component />
+          </Suspense>
+        </div>
+      ))}
     </div>
   );
 }

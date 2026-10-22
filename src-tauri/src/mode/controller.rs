@@ -1010,6 +1010,9 @@ pub async fn detach_all(state: &AppState) {
             log::error!("退出时把 {} 指回直连失败: {error}", app.as_str());
         }
     }
+    if let Err(error) = crate::proxy::hooks::HookRegistry::global().release("claude") {
+        log::error!("退出时清理供应商代理失败: {error}");
+    }
     if state.proxy_service.is_running().await {
         if let Err(error) = state.proxy_service.stop().await {
             log::warn!("退出时停止代理服务失败: {error}");
@@ -1662,7 +1665,11 @@ pub async fn record_failover_route(
 pub async fn startup(state: &AppState) {
     for app in PROXY_APPS {
         let result = match lock_settled(state, &app).await {
-            Ok(_guard) => startup_app(state, &app).await,
+            Ok(_guard) => startup_app(state, &app).await.and_then(|()| {
+                crate::proxy::hooks::HookRegistry::global()
+                    .reconcile(&state.db, app.as_str())
+                    .map_err(err)
+            }),
             Err(error) => Err(error.to_string()),
         };
         if let Err(error) = result {
@@ -2585,6 +2592,71 @@ mod mode_tests {
         .await
         .expect("ephemeral port");
         AppState::new(db)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial]
+    async fn provider_hooks_follow_committed_selection_and_startup() {
+        use crate::provider::ProviderMeta;
+        use crate::proxy::hooks::{HookRegistry, ProxyHook};
+        use std::sync::Mutex;
+
+        struct Recorder(Arc<Mutex<Vec<Option<String>>>>);
+        impl ProxyHook for Recorder {
+            fn matches_provider(&self, _: &ProviderMeta) -> bool {
+                false
+            }
+            fn on_selection_changed(
+                &self,
+                app: &str,
+                meta: Option<&ProviderMeta>,
+            ) -> Result<(), String> {
+                if app == "claude" {
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .push(meta.and_then(|meta| meta.provider_type.clone()));
+                }
+                Ok(())
+            }
+        }
+
+        let _home = Home::new();
+        let mut a = claude("hook-a", "https://a.invalid", json!({}));
+        a.meta = Some(ProviderMeta {
+            provider_type: Some("lifecycle_test".into()),
+            ..Default::default()
+        });
+        let b = claude("hook-b", "https://b.invalid", json!({}));
+        let state = state_with(AppType::Claude, &[a, b], "hook-a").await;
+        let events = Arc::new(Mutex::new(Vec::new()));
+        HookRegistry::global().register(Box::new(Recorder(events.clone())));
+
+        ProviderService::switch(&state, AppType::Claude, "hook-a").unwrap();
+        assert_eq!(
+            events.lock().unwrap().last().cloned(),
+            Some(Some("lifecycle_test".into()))
+        );
+        let count = events.lock().unwrap().len();
+        assert!(ProviderService::switch(&state, AppType::Claude, "missing").is_err());
+        assert_eq!(events.lock().unwrap().len(), count);
+
+        enter_with_route(&state, &AppType::Claude, false, Some("hook-b"))
+            .await
+            .unwrap();
+        assert_eq!(events.lock().unwrap().last().cloned(), Some(None));
+        set_route(&state, &AppType::Claude, "hook-a").await.unwrap();
+        assert_eq!(
+            events.lock().unwrap().last().cloned(),
+            Some(Some("lifecycle_test".into()))
+        );
+        exit(&state, &AppType::Claude).await.unwrap();
+        events.lock().unwrap().clear();
+        startup(&state).await;
+        assert_eq!(
+            events.lock().unwrap().last().cloned(),
+            Some(Some("lifecycle_test".into()))
+        );
     }
 
     fn settings_path() -> std::path::PathBuf {

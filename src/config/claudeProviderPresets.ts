@@ -61,7 +61,14 @@ export interface ProviderPreset extends PresetFamilyFields {
   // 供应商类型标识（用于特殊供应商检测）
   // - "github_copilot": GitHub Copilot 供应商（需要 OAuth 认证）
   // - "codex_oauth": OpenAI Codex via ChatGPT Plus/Pro 反代（需要 OAuth 认证）
-  providerType?: "github_copilot" | "codex_oauth" | "xai_oauth";
+  // - 扩展供应商（如 huawei_codeagent_2 / huawei_codeagent_3）
+  providerType?: string;
+
+  // 供应商目标应用（扩展供应商使用）：CLI 预设为 "claude"，Desktop 预设为 "claude_desktop"
+  appTarget?: "claude" | "claude_desktop";
+
+  // 扩展供应商：请求/响应体指纹替换规则
+  fingerprintReplacements?: { from: string; to: string }[];
 
   // 是否需要 OAuth 认证（而非 API Key）
   requiresOAuth?: boolean;

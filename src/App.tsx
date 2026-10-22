@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import "@/huawei";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
 import { invoke } from "@tauri-apps/api/core";

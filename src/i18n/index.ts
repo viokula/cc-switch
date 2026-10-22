@@ -7,6 +7,36 @@ import tr from "./locales/tr.json";
 import zh from "./locales/zh.json";
 import zhTW from "./locales/zh-TW.json";
 
+// 华为 CodeAgent 扩展的语言包与主语言包合并（providerForm 命名空间按子键合并）。
+import huaweiEn from "@/huawei/locales/en.json";
+import huaweiJa from "@/huawei/locales/ja.json";
+import huaweiZh from "@/huawei/locales/zh.json";
+import huaweiZhTW from "@/huawei/locales/zh-TW.json";
+
+const mergeLocale = (
+  base: Record<string, unknown>,
+  extra: Record<string, unknown>,
+): Record<string, unknown> => {
+  const merged: Record<string, unknown> = { ...base, ...extra };
+  const baseProviderForm = base.providerForm as
+    | Record<string, unknown>
+    | undefined;
+  const extraProviderForm = extra.providerForm as
+    | Record<string, unknown>
+    | undefined;
+  if (baseProviderForm || extraProviderForm) {
+    merged.providerForm = {
+      ...baseProviderForm,
+      ...extraProviderForm,
+      presets: {
+        ...(baseProviderForm?.presets as Record<string, unknown> | undefined),
+        ...(extraProviderForm?.presets as Record<string, unknown> | undefined),
+      },
+    };
+  }
+  return merged;
+};
+
 type Language = "zh" | "zh-TW" | "en" | "ja" | "tr";
 
 const DEFAULT_LANGUAGE: Language = "zh";
@@ -72,16 +102,16 @@ const getInitialLanguage = (): Language => {
 const resources = {
   tr: { translation: tr },
   en: {
-    translation: en,
+    translation: mergeLocale(en, huaweiEn),
   },
   ja: {
-    translation: ja,
+    translation: mergeLocale(ja, huaweiJa),
   },
   zh: {
-    translation: zh,
+    translation: mergeLocale(zh, huaweiZh),
   },
   "zh-TW": {
-    translation: zhTW,
+    translation: mergeLocale(zhTW, huaweiZhTW),
   },
 };
 

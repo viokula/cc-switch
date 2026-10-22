@@ -20,6 +20,7 @@ mod gemini_config;
 mod gemini_mcp;
 mod grok_config;
 pub mod hermes_config;
+mod huawei;
 mod init_status;
 mod jsonc_document;
 mod kimi_config;
@@ -80,6 +81,12 @@ pub use services::{
 };
 pub use settings::{update_settings, AppSettings};
 pub use store::AppState;
+// 华为 CodeAgent 集成测试所需的顶层再导出
+pub use huawei::auth::manager::{
+    decrypt_password, encrypt_password, HuaweiCodeAgentAuthManager, HuaweiCodeAgentToken,
+};
+pub use huawei::proxy_processor::{resolve_extra_auth_headers, ExtraAuthHeader};
+pub use proxy::providers::ProviderType;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -1307,6 +1314,9 @@ pub fn run() {
                 app.manage(commands::AgyAccountState(Arc::new(manager)));
             }
 
+            // 初始化华为 CodeAgent 认证管理器与代理钩子
+            huawei::init(app);
+
             // 初始化全局出站代理 HTTP 客户端
             {
                 let db = &app.state::<AppState>().db;
@@ -1514,6 +1524,14 @@ pub fn run() {
             commands::delete_provider,
             commands::remove_provider_from_live_config,
             commands::switch_provider,
+            huawei::auth::commands::huawei_codeagent_2_start_login,
+            huawei::auth::commands::huawei_codeagent_2_get_status,
+            huawei::auth::commands::huawei_codeagent_2_logout,
+            huawei::auth::commands::huawei_codeagent_2_refresh_token,
+            huawei::auth::commands::huawei_codeagent_2_list_accounts,
+            huawei::auth::commands::huawei_codeagent_2_remove_account,
+            huawei::auth::commands::huawei_codeagent_2_set_default_account,
+            huawei::auth::commands::huawei_codeagent_2_fetch_models,
             commands::import_default_config,
             commands::get_claude_desktop_status,
             commands::get_claude_desktop_default_routes,

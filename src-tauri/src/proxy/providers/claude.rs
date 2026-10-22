@@ -31,17 +31,18 @@ const REASONING_VENDOR_HINTS: &[&str] = &["deepseek", "mimo", "xiaomimimo"];
 /// 获取 Claude 供应商的 API 格式
 ///
 /// 供 handler/forwarder 外部使用的公开函数。
-/// 优先级：meta.apiFormat > settings_config.api_format > openrouter_compat_mode > 默认 "anthropic"
+/// 优先级：托管供应商协议 > meta.apiFormat > settings_config.api_format > openrouter_compat_mode > 默认 "anthropic"
 pub fn get_claude_api_format(provider: &Provider) -> &'static str {
-    // 0) Managed Responses OAuth providers force their wire protocol. This is
-    // an invariant, not a preset default: editable metadata must not be able to
-    // send an Anthropic Messages body to a Responses-only upstream.
+    // Managed providers force their wire protocol in this shared resolver so
+    // request conversion, response conversion, and streaming agree even when
+    // editable metadata (including older presets) declares Anthropic format.
     if let Some(meta) = provider.meta.as_ref() {
-        if matches!(
-            meta.provider_type.as_deref(),
-            Some("codex_oauth" | "xai_oauth")
-        ) {
-            return "openai_responses";
+        match meta.provider_type.as_deref() {
+            Some("codex_oauth" | "xai_oauth") => return "openai_responses",
+            Some("huawei_codeagent_2" | "huawei_codeagent_3" | "huawei_w3" | "huawei_idea") => {
+                return "openai_chat";
+            }
+            _ => {}
         }
     }
 
@@ -1567,6 +1568,68 @@ mod tests {
             json!(["reasoning.encrypted_content"])
         );
         assert!(transformed.get("store").is_none());
+    }
+
+    #[test]
+    fn huawei_protocol_ignores_editable_formats_for_requests_and_responses() {
+        let adapter = ClaudeAdapter::new();
+        for provider_type in [
+            "huawei_codeagent_2",
+            "huawei_codeagent_3",
+            "huawei_w3",
+            "huawei_idea",
+        ] {
+            for api_format in [
+                None,
+                Some("anthropic"),
+                Some("openai_responses"),
+                Some("gemini_native"),
+            ] {
+                let provider = create_provider_with_meta(
+                    json!({"api_format": "anthropic"}),
+                    ProviderMeta {
+                        provider_type: Some(provider_type.to_string()),
+                        api_format: api_format.map(str::to_string),
+                        ..Default::default()
+                    },
+                );
+                let resolved = get_claude_api_format(&provider);
+                assert_eq!(resolved, "openai_chat", "{provider_type}");
+                assert!(claude_api_format_needs_transform(resolved));
+                assert!(adapter.needs_transform(&provider), "{provider_type}");
+
+                let request = adapter
+                    .transform_request(
+                        json!({
+                            "model": "test-model",
+                            "max_tokens": 64,
+                            "system": "Test system prompt",
+                            "messages": [{"role": "user", "content": "hello"}]
+                        }),
+                        &provider,
+                    )
+                    .expect("Huawei request conversion");
+                assert!(request.get("system").is_none());
+                assert_eq!(request["messages"][0]["role"], "system");
+
+                let response = adapter
+                    .transform_response(json!({
+                        "id": "chatcmpl-test",
+                        "object": "chat.completion",
+                        "model": "test-model",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "hello back"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+                    }))
+                    .expect("Huawei response conversion");
+                assert_eq!(response["type"], "message");
+                assert_eq!(response["content"][0]["text"], "hello back");
+                assert_eq!(response["stop_reason"], "end_turn");
+            }
+        }
     }
 
     #[test]

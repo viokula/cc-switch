@@ -80,10 +80,18 @@ impl Provider {
             || self.claude_base_url_contains("githubcopilot.com")
     }
 
+    pub fn is_huawei_codeagent(&self) -> bool {
+        matches!(
+            self.provider_type(),
+            Some("huawei_codeagent_2" | "huawei_codeagent_3" | "huawei_w3" | "huawei_idea")
+        )
+    }
+
     pub fn uses_managed_account_auth(&self) -> bool {
         self.is_github_copilot()
             || self.is_codex_oauth()
             || self.is_xai_oauth()
+            || self.is_huawei_codeagent()
             || self.claude_base_url_contains("chatgpt.com/backend-api/codex")
     }
 
@@ -617,6 +625,13 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub stack_models: Option<Vec<ClaudeStackModel>>,
+    /// 供应商扩展字段（供应商钩子/插件自定义的键值，例如华为 CodeAgent 的
+    /// `appTarget`、`extraAuthHeaders`、`skipTlsVerify` 等）。
+    ///
+    /// 前端把这些键写在 meta 的顶层；`#[serde(flatten)]` 让它们与具名字段共存，
+    /// 与旧版设备同步时也能原样往返。
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 /// Stack 模式下 Claude Code 供应商发布的一个模型。
@@ -1286,6 +1301,25 @@ mod tests {
         assert!(provider.icon.is_none());
         assert!(provider.icon_color.is_none());
         assert!(!provider.in_failover_queue);
+    }
+
+    #[test]
+    fn huawei_providers_use_managed_account_auth() {
+        for provider_type in [
+            "huawei_codeagent_2",
+            "huawei_codeagent_3",
+            "huawei_w3",
+            "huawei_idea",
+        ] {
+            let mut provider =
+                Provider::with_id("huawei".into(), "Huawei".into(), json!({"env": {}}), None);
+            provider.meta = Some(ProviderMeta {
+                provider_type: Some(provider_type.into()),
+                ..Default::default()
+            });
+            assert!(provider.is_huawei_codeagent());
+            assert!(provider.uses_managed_account_auth());
+        }
     }
 
     #[test]

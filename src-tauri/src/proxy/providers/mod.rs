@@ -97,6 +97,12 @@ pub enum ProviderType {
     CodexOAuth,
     /// xAI Grok OAuth（需要 Anthropic ↔ Responses API 转换）
     XaiOAuth,
+    /// 华为 CodeAgent 2.0（/api/v2，OpenAI Chat 上游，托管认证）
+    #[serde(rename = "huawei_codeagent_2")]
+    HuaweiCodeAgent2,
+    /// 华为 CodeAgent 3.0（/api/v3，OpenAI Chat 上游，托管认证）
+    #[serde(rename = "huawei_codeagent_3")]
+    HuaweiCodeAgent3,
 }
 
 impl ProviderType {
@@ -111,6 +117,7 @@ impl ProviderType {
             ProviderType::GitHubCopilot => true,
             ProviderType::CodexOAuth => true,
             ProviderType::XaiOAuth => true,
+            ProviderType::HuaweiCodeAgent2 | ProviderType::HuaweiCodeAgent3 => true,
             ProviderType::OpenRouter => false,
             _ => false,
         }
@@ -129,6 +136,9 @@ impl ProviderType {
             ProviderType::GitHubCopilot => "https://api.githubcopilot.com",
             ProviderType::CodexOAuth => CHATGPT_CODEX_BASE_URL,
             ProviderType::XaiOAuth => XAI_API_BASE_URL,
+            ProviderType::HuaweiCodeAgent2 | ProviderType::HuaweiCodeAgent3 => {
+                "https://codeagentcli.rnd.huawei.com"
+            }
         }
     }
 
@@ -159,6 +169,15 @@ impl ProviderType {
                     }
                     if meta.provider_type.as_deref() == Some("xai_oauth") {
                         return Some(ProviderType::XaiOAuth);
+                    }
+                    match meta.provider_type.as_deref() {
+                        Some("huawei_codeagent_2") | Some("huawei_w3") | Some("huawei_idea") => {
+                            return Some(ProviderType::HuaweiCodeAgent2);
+                        }
+                        Some("huawei_codeagent_3") => {
+                            return Some(ProviderType::HuaweiCodeAgent3);
+                        }
+                        _ => {}
                     }
                 }
 
@@ -232,6 +251,8 @@ impl ProviderType {
             ProviderType::GitHubCopilot => "github_copilot",
             ProviderType::CodexOAuth => "codex_oauth",
             ProviderType::XaiOAuth => "xai_oauth",
+            ProviderType::HuaweiCodeAgent2 => "huawei_codeagent_2",
+            ProviderType::HuaweiCodeAgent3 => "huawei_codeagent_3",
         }
     }
 }
@@ -258,6 +279,9 @@ impl std::str::FromStr for ProviderType {
             }
             "codex_oauth" | "codex-oauth" | "codexoauth" => Ok(ProviderType::CodexOAuth),
             "xai_oauth" | "xai-oauth" | "xaioauth" => Ok(ProviderType::XaiOAuth),
+            "huawei_codeagent_2" | "huawei-codeagent-2" => Ok(ProviderType::HuaweiCodeAgent2),
+            "huawei_codeagent_3" | "huawei-codeagent-3" => Ok(ProviderType::HuaweiCodeAgent3),
+            "huawei_w3" | "huawei_idea" => Ok(ProviderType::HuaweiCodeAgent2),
             _ => Err(format!("Invalid provider type: {s}")),
         }
     }
@@ -285,6 +309,9 @@ pub fn get_adapter_for_provider_type(provider_type: &ProviderType) -> Box<dyn Pr
         | ProviderType::GitHubCopilot
         | ProviderType::CodexOAuth
         | ProviderType::XaiOAuth => Box::new(ClaudeAdapter::new()),
+        ProviderType::HuaweiCodeAgent2 | ProviderType::HuaweiCodeAgent3 => {
+            Box::new(ClaudeAdapter::new())
+        }
         ProviderType::Codex => Box::new(CodexAdapter::new()),
         ProviderType::Gemini | ProviderType::GeminiCli => Box::new(GeminiAdapter::new()),
     }

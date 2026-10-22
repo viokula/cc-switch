@@ -592,7 +592,13 @@ fn is_managed_oauth_proxy_provider(provider: &Provider) -> bool {
         .is_some_and(|provider_type| {
             matches!(
                 provider_type,
-                "github_copilot" | "codex_oauth" | "xai_oauth"
+                "github_copilot"
+                    | "codex_oauth"
+                    | "xai_oauth"
+                    | "huawei_codeagent_2"
+                    | "huawei_codeagent_3"
+                    | "huawei_w3"
+                    | "huawei_idea"
             )
         })
 }
@@ -2045,6 +2051,10 @@ mod tests {
             ("github_copilot", "openai_chat"),
             ("codex_oauth", "openai_responses"),
             ("xai_oauth", "openai_responses"),
+            ("huawei_codeagent_2", "anthropic"),
+            ("huawei_codeagent_3", "anthropic"),
+            ("huawei_w3", "anthropic"),
+            ("huawei_idea", "anthropic"),
         ] {
             let provider = oauth_proxy_provider(provider_type, provider_type, api_format);
             validate_proxy_provider(&provider).expect("oauth proxy provider should validate");
@@ -2064,6 +2074,28 @@ mod tests {
                 json!([{ "name": "claude-sonnet-4-6", "labelOverride": "GPT-5.4" }])
             );
         }
+    }
+
+    #[test]
+    fn claude_desktop_huawei_managed_auth_still_requires_base_url() {
+        for provider_type in [
+            "huawei_codeagent_2",
+            "huawei_codeagent_3",
+            "huawei_w3",
+            "huawei_idea",
+        ] {
+            let mut provider = oauth_proxy_provider(provider_type, provider_type, "anthropic");
+            provider.settings_config["env"]["ANTHROPIC_BASE_URL"] = json!("");
+            let error = validate_proxy_provider(&provider).expect_err("base URL is required");
+            assert!(error.to_string().contains("Base URL"), "{provider_type}");
+        }
+    }
+
+    #[test]
+    fn claude_desktop_non_managed_proxy_still_requires_static_key() {
+        let provider = oauth_proxy_provider("custom", "custom", "openai_chat");
+        let error = validate_proxy_provider(&provider).expect_err("custom provider needs a key");
+        assert!(error.to_string().contains("API Key"));
     }
 
     #[test]

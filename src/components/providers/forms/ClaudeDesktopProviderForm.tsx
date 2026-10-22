@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  createElement,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
@@ -66,6 +73,8 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import type { ManagedAuthProvider } from "@/lib/api";
 import { useCopilotAuth, useCodexOauth, useXaiOauth } from "./hooks";
 import { isOAuthProviderType } from "@/config/constants";
+import { getFormExtension } from "@/config/formExtensions";
+import { isHuaweiProviderType } from "@/huawei/constants";
 
 export type ClaudeDesktopProviderFormValues = ProviderFormData & {
   presetId?: string;
@@ -385,6 +394,21 @@ export function ClaudeDesktopProviderForm({
   );
   const activeProviderType =
     activePreset?.providerType ?? initialData?.meta?.providerType;
+  const extension = getFormExtension(activeProviderType);
+  const [selectedExtensionAccountId, setSelectedExtensionAccountId] = useState<
+    string | null
+  >(() => initialData?.meta?.selectedAccountId ?? null);
+  useEffect(() => {
+    setSelectedExtensionAccountId(
+      activeProviderType === initialData?.meta?.providerType
+        ? (initialData?.meta?.selectedAccountId ?? null)
+        : null,
+    );
+  }, [
+    activeProviderType,
+    initialData?.meta?.providerType,
+    initialData?.meta?.selectedAccountId,
+  ]);
   const { isAuthenticated: isCopilotAuthenticated, accounts: copilotAccounts } =
     useCopilotAuth();
   const {
@@ -402,7 +426,11 @@ export function ClaudeDesktopProviderForm({
   const usesManagedOAuth =
     activePreset?.requiresOAuth === true ||
     isOAuthProviderType(activeProviderType);
-  const effectiveMode: "direct" | "proxy" = usesManagedOAuth ? "proxy" : mode;
+  // 华为供应商强制本地路由（直连会 401）：与托管 OAuth 一并走 proxy，
+  // 用户不可切回直连，Direct 选项在 UI 上隐藏。
+  const isHuaweiProvider = isHuaweiProviderType(activeProviderType);
+  const effectiveMode: "direct" | "proxy" =
+    usesManagedOAuth || isHuaweiProvider ? "proxy" : mode;
   const needsModelMapping = effectiveMode === "proxy";
   const routes = needsModelMapping ? proxyRoutes : directRoutes;
   const setRoutes = needsModelMapping ? setProxyRoutes : setDirectRoutes;
@@ -510,7 +538,7 @@ export function ClaudeDesktopProviderForm({
   };
 
   const handleModelMappingChange = (checked: boolean) => {
-    if (usesManagedOAuth) return;
+    if (usesManagedOAuth || isHuaweiProvider) return;
     setMode(checked ? "proxy" : "direct");
     if (checked) {
       // 切到 proxy：只恢复/初始化映射模式自己的固定四档，不复用直连模型列表。
@@ -560,6 +588,7 @@ export function ClaudeDesktopProviderForm({
     selectedGitHubAccountId,
     selectedCodexAccountId,
     selectedXaiAccountId,
+    selectedExtensionAccountId,
   ]);
 
   const handleFetchManagedModels = async () => {
@@ -600,6 +629,8 @@ export function ClaudeDesktopProviderForm({
         return;
       }
       request = fetchXaiOauthModels(selectedXaiAccountId);
+    } else if (extension?.fetchModels) {
+      request = extension.fetchModels(selectedExtensionAccountId);
     } else {
       return;
     }
@@ -876,7 +907,11 @@ export function ClaudeDesktopProviderForm({
     }, {});
 
     const meta: ProviderMeta = {
+      ...(extension?.defaultMetaFields ?? {}),
       ...(initialData?.meta ?? {}),
+      selectedAccountId: extension
+        ? (selectedExtensionAccountId ?? undefined)
+        : undefined,
       claudeDesktopMode: effectiveMode,
       apiFormat:
         activeProviderType === "xai_oauth"
@@ -888,6 +923,11 @@ export function ClaudeDesktopProviderForm({
 
     meta.claudeDesktopModelRoutes = routeMap;
     meta.providerType = activeProviderType;
+    // 华为供应商：标记 appTarget=claude_desktop，后端 on_takeover/on_restore
+    // 据此跳过 CLI 专用的连通性代理（Desktop 是独立进程，不读 ~/.claude.json）。
+    if (isHuaweiProvider) {
+      meta.appTarget = "claude_desktop";
+    }
     meta.authBinding =
       activeProviderType === "github_copilot"
         ? {
@@ -1014,12 +1054,19 @@ export function ClaudeDesktopProviderForm({
                     fastModeEnabled={codexFastMode}
                     onFastModeChange={setCodexFastMode}
                   />
-                ) : (
+                ) : extension?.AuthSection ? (
+                  <Suspense fallback={null}>
+                    {createElement(extension.AuthSection, {
+                      selectedAccountId: selectedExtensionAccountId,
+                      onAccountSelect: setSelectedExtensionAccountId,
+                    })}
+                  </Suspense>
+                ) : activeProviderType === "xai_oauth" ? (
                   <XaiOAuthSection
                     selectedAccountId={selectedXaiAccountId}
                     onAccountSelect={setSelectedXaiAccountId}
                   />
-                )}
+                ) : null}
               </div>
             ) : (
               <ApiKeySection
@@ -1081,7 +1128,7 @@ export function ClaudeDesktopProviderForm({
                     onValueChange={(value) =>
                       handleModelMappingChange(value === "proxy")
                     }
-                    disabled={usesManagedOAuth}
+                    disabled={usesManagedOAuth || isHuaweiProvider}
                   >
                     <SelectTrigger
                       id="claude-desktop-model-mode"
@@ -1093,11 +1140,13 @@ export function ClaudeDesktopProviderForm({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="direct">
-                        {t("claudeDesktop.modelModeDirect", {
-                          defaultValue: "直连",
-                        })}
-                      </SelectItem>
+                      {!isHuaweiProvider && (
+                        <SelectItem value="direct">
+                          {t("claudeDesktop.modelModeDirect", {
+                            defaultValue: "直连",
+                          })}
+                        </SelectItem>
+                      )}
                       <SelectItem value="proxy">
                         {t("claudeDesktop.modelModeProxy", {
                           defaultValue: "模型映射",

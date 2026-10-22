@@ -79,6 +79,8 @@ pnpm tauri build -c '{"bundle":{"createUpdaterArtifacts":false}}'
 
 For a debug build, append `--debug` to the command above. This single-quote form works on macOS and Linux; on Windows, save `{"bundle":{"createUpdaterArtifacts":false}}` to a JSON file and pass it with `-c <file path>`.
 
+On Windows, `src-tauri\build.bat` builds a standalone release executable without installers or update signing. After installing dependencies with `corepack pnpm install`, run the script from any working directory. It initializes the MSVC environment, rebuilds the frontend, and then runs `cargo build --release`; the executable is written to `src-tauri/target/release/cc-switch.exe`. The script uses an internal Huawei Rust mirror, so access to that mirror is required if rustup needs to download a toolchain.
+
 ## Testing
 
 **Frontend**: vitest runs `*.test.ts(x)` under `tests/` and `src/`; Tauri calls are mocked with MSW (see `tests/msw/`); component tests use @testing-library/react.

@@ -16,6 +16,11 @@ static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
 /// 不走任何代理的客户端：上游是本机地址（Ollama、LM Studio 等）时使用
 static DIRECT_CLIENT: OnceCell<Client> = OnceCell::new();
 
+/// 跳过 TLS 校验的客户端（供应商钩子 `skip_tls_verify` 要求时使用）。
+/// 缓存两份：一份走当前代理配置，一份直连本机地址。
+static INSECURE_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
+static INSECURE_DIRECT_CLIENT: OnceCell<Client> = OnceCell::new();
+
 /// 当前代理 URL（用于日志和状态查询）
 static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
 
@@ -38,7 +43,7 @@ pub fn set_proxy_port(port: u16) {
 }
 
 /// 获取 CC Switch 代理服务器的监听端口
-fn get_proxy_port() -> u16 {
+pub(crate) fn get_proxy_port() -> u16 {
     CC_SWITCH_PROXY_PORT
         .get()
         .and_then(|lock| lock.read().ok())
@@ -109,6 +114,12 @@ pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
+    if let Some(lock) = INSECURE_CLIENT.get() {
+        let client = build_client_with_flags(effective_url, true)?;
+        *lock
+            .write()
+            .map_err(|_| "Failed to update insecure proxy client: lock poisoned")? = client;
+    }
 
     // 更新客户端
     if let Some(lock) = GLOBAL_CLIENT.get() {
@@ -153,6 +164,12 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
     let new_client = build_client(effective_url)?;
+    if let Some(lock) = INSECURE_CLIENT.get() {
+        let client = build_client_with_flags(effective_url, true)?;
+        *lock
+            .write()
+            .map_err(|_| "Failed to update insecure proxy client: lock poisoned")? = client;
+    }
 
     // 更新客户端
     if let Some(lock) = GLOBAL_CLIENT.get() {
@@ -210,6 +227,46 @@ pub fn get_for_url(url: &str) -> Client {
     } else {
         get()
     }
+}
+
+/// 按目标地址取「跳过 TLS 校验」的客户端：本机地址直连，其余同当前代理配置。
+///
+/// 仅供供应商钩子显式声明 `skip_tls_verify` 时使用（例如企业内部网关的自签证书）。
+pub fn get_for_url_insecure(url: &str) -> Client {
+    if is_loopback_url(url) {
+        insecure_direct_client()
+    } else {
+        insecure_client()
+    }
+}
+
+fn insecure_client() -> Client {
+    INSECURE_CLIENT
+        .get_or_init(|| {
+            RwLock::new(
+                build_client_with_flags(get_current_proxy_url().as_deref(), true).unwrap_or_else(
+                    |e| {
+                        log::warn!("[GlobalProxy] Failed to build insecure client: {e}");
+                        Client::new()
+                    },
+                ),
+            )
+        })
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()
+}
+
+fn insecure_direct_client() -> Client {
+    INSECURE_DIRECT_CLIENT
+        .get_or_init(|| {
+            let builder = base_builder().no_proxy().danger_accept_invalid_certs(true);
+            builder.build().unwrap_or_else(|e| {
+                log::warn!("[GlobalProxy] Failed to build insecure direct client: {e}");
+                Client::new()
+            })
+        })
+        .clone()
 }
 
 /// 发往 `url` 时应使用的上游代理：本机地址返回 None（直连），其余返回当前全局代理
@@ -296,7 +353,16 @@ fn base_builder() -> reqwest::ClientBuilder {
 
 /// 构建 HTTP 客户端
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_flags(proxy_url, false)
+}
+
+/// 构建 HTTP 客户端（可控是否跳过 TLS 校验）
+fn build_client_with_flags(proxy_url: Option<&str>, insecure: bool) -> Result<Client, String> {
     let mut builder = base_builder();
+
+    if insecure {
+        builder = builder.danger_accept_invalid_certs(true);
+    }
 
     // 有代理地址则使用代理，否则跟随系统代理
     if let Some(url) = proxy_url {
