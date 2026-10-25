@@ -13,7 +13,10 @@ import type { PresetTheme } from "./claudeProviderPresets";
 import type { PresetFamilyFields } from "./presetFamilies";
 
 export type ClaudeDesktopApiFormat =
-  "anthropic" | "openai_chat" | "openai_responses" | "gemini_native";
+  | "anthropic"
+  | "openai_chat"
+  | "openai_responses"
+  | "gemini_native";
 
 export interface ClaudeDesktopRoutePreset {
   routeId: string;

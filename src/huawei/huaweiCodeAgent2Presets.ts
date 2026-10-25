@@ -22,7 +22,11 @@ const DEFAULT_FINGERPRINT_REPLACEMENTS: FingerprintReplacement[] = [
 
 const HUAWEI_CODEAGENT_2_AUTH_HEADERS: ExtraAuthHeader[] = [
   { name: "x-auth-token", tokenSource: "huawei_codeagent_2" },
-  { name: "Authorization", tokenSource: "huawei_codeagent_2", valuePrefix: "Bearer " },
+  {
+    name: "Authorization",
+    tokenSource: "huawei_codeagent_2",
+    valuePrefix: "Bearer ",
+  },
   { name: "X-snap-traceid", tokenSource: "uuid" },
   { name: "Agent-Type", value: "AgentCenter" },
   { name: "app-id", value: "com.huawei.devmind.codebot.apibot" },

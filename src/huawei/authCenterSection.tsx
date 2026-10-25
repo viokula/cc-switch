@@ -13,7 +13,9 @@ export function HuaweiCodeAgentAuthCenterSection() {
         </div>
         <div>
           <h4 className="font-medium">
-            {t("huaweiCodeAgent2.authCenterTitle", { defaultValue: "华为 CodeAgent" })}
+            {t("huaweiCodeAgent2.authCenterTitle", {
+              defaultValue: "华为 CodeAgent",
+            })}
           </h4>
           <p className="text-sm text-muted-foreground">
             {t("huaweiCodeAgent2.authCenterDescription", {

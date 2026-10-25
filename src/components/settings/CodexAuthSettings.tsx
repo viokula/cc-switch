@@ -190,9 +190,7 @@ export function CodexAuthSettings({
           ) : undefined
         }
         checked={classicSubagents}
-        onCheckedChange={(value) =>
-          onChange({ codexStackClassicTools: value })
-        }
+        onCheckedChange={(value) => onChange({ codexStackClassicTools: value })}
       />
 
       <SettingsSwitchRow
