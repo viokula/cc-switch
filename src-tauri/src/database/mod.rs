@@ -27,6 +27,7 @@ pub(crate) mod backup;
 mod dao;
 mod migration;
 mod schema;
+mod schema_health;
 
 #[cfg(test)]
 mod tests;
@@ -123,24 +124,42 @@ impl Database {
             conn: Mutex::new(conn),
             log_count_cache: Mutex::new(None),
         };
-        db.create_tables()?;
-
-        // Pre-migration backup: only when upgrading from an existing database
-        {
+        // Check the version before any schema writes, including CREATE IF NOT EXISTS.
+        let (version, missing) = {
             let conn = lock_conn!(db.conn);
             let version = Self::get_user_version(&conn)?;
-            drop(conn);
-            if version > 0 && version < SCHEMA_VERSION {
-                log::info!(
-                    "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
-                );
-                if let Err(e) = db.backup_database_file() {
-                    log::warn!("Pre-migration backup failed, continuing migration: {e}");
-                }
+            if version > SCHEMA_VERSION {
+                return Err(AppError::Database(format!(
+                    "数据库版本 {version} 高于当前支持的 {SCHEMA_VERSION}，请升级应用"
+                )));
             }
+            let missing = Self::missing_schema_columns(&conn)?;
+            (version, missing)
+        };
+        if db_exists && (version < SCHEMA_VERSION || !missing.is_empty()) {
+            // Never mutate an existing database if its safety backup fails.
+            db.backup_database_file()?;
         }
-
-        db.apply_schema_migrations()?;
+        {
+            let conn = lock_conn!(db.conn);
+            conn.execute_batch("SAVEPOINT startup_schema")?;
+            let result = (|| {
+                // Branch databases may report a recent version while lacking columns.
+                // Repair only explicitly supported additive fields before creating indexes.
+                if version == SCHEMA_VERSION {
+                    Self::repair_schema_columns(&conn)?;
+                }
+                Self::create_tables_on_conn(&conn)?;
+                Self::apply_schema_migrations_on_conn(&conn)?;
+                Self::repair_schema_columns(&conn)?;
+                Ok::<_, AppError>(())
+            })();
+            if let Err(error) = result {
+                conn.execute_batch("ROLLBACK TO startup_schema; RELEASE startup_schema")?;
+                return Err(error);
+            }
+            conn.execute_batch("RELEASE startup_schema")?;
+        }
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }

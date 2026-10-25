@@ -1459,6 +1459,49 @@ fn incremental_vacuum_reclaims_entire_freelist() {
     assert_eq!(freelist(&conn), 0, "all free pages should be reclaimed");
 }
 
+#[test]
+fn main_version_repairs_skill_and_mcp_lists_without_losing_data() {
+    for missing in [true, false] {
+        let db = Database::memory().expect("memory database");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch(r#"INSERT INTO skills (id, name, directory, enabled_claude, enabled_mcode, content_hash)
+                VALUES ('saved-skill', 'Saved skill', 'saved-skill', 1, 1, 'kept-hash');
+                INSERT INTO mcp_servers (id, name, server_config, enabled_codex, enabled_mcode, tags)
+                VALUES ('saved-mcp', 'Saved MCP', '{"command":"test-server"}', 1, 1, '[]');"#).unwrap();
+            if missing {
+                conn.execute_batch(
+                    "ALTER TABLE skills DROP COLUMN enabled_mcode;
+                    ALTER TABLE mcp_servers DROP COLUMN enabled_mcode;",
+                )
+                .unwrap();
+            }
+            Database::set_user_version(&conn, SCHEMA_VERSION).unwrap();
+        }
+        if missing {
+            assert!(db.get_all_installed_skills().is_err());
+            assert!(db.get_all_mcp_servers().is_err());
+        }
+        db.apply_schema_migrations().unwrap();
+        db.apply_schema_migrations().unwrap();
+        let skills = db
+            .get_all_installed_skills()
+            .expect("read skills after migration");
+        let servers = db.get_all_mcp_servers().expect("read MCP after migration");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(servers.len(), 1);
+        assert!(skills["saved-skill"].apps.claude);
+        assert_eq!(
+            skills["saved-skill"].content_hash.as_deref(),
+            Some("kept-hash")
+        );
+        assert!(servers["saved-mcp"].apps.codex);
+        assert_eq!(servers["saved-mcp"].server["command"], "test-server");
+        assert_eq!(skills["saved-skill"].apps.mcode, !missing);
+        assert_eq!(servers["saved-mcp"].apps.mcode, !missing);
+    }
+}
+
 /// v22 已随 v4.0.19 发布：从它升级必须补上 `mcp_servers.enabled_omp`，否则读 MCP 列表报
 /// `no such column`。Skills 没有 omp 列（启用状态按原生目录现算）。
 #[test]

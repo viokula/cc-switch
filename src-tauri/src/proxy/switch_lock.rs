@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Per-app switch lock
 //!
 //! 确保同一应用同时只有一个切换、进入 / 退出代理的操作在执行，防止并发操作导致
@@ -38,5 +40,14 @@ impl SwitchLockManager {
             }
         };
         lock.lock_owned().await
+    }
+
+    /// 该应用的切换锁是否正被持有（不阻塞）。
+    pub async fn is_locked_for_app(&self, app_type: &str) -> bool {
+        let locks = self.locks.read().await;
+        match locks.get(app_type) {
+            Some(lock) => lock.try_lock().is_err(),
+            None => false,
+        }
     }
 }
