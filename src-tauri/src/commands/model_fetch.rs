@@ -176,6 +176,7 @@ fn parse_opencode_models(output: &str) -> Vec<OpenCodeModelRef> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_models_for_config(
     app_handle: tauri::AppHandle,
     base_url: String,

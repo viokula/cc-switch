@@ -16,6 +16,7 @@ pub trait ProxyHook: Send + Sync {
     }
     fn on_request_body(&self, _body: &mut Value, _meta: &ProviderMeta) {}
 
+    #[allow(clippy::type_complexity)]
     fn on_auth_headers(
         &self,
         _meta: &ProviderMeta,

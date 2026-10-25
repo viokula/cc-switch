@@ -311,9 +311,8 @@ impl HuaweiCodeAgentAuthManager {
         let user = token.user.clone();
 
         let password = match encrypted_password {
-            Some(ref enc) => decrypt_password(enc).map_err(|e| {
+            Some(ref enc) => decrypt_password(enc).inspect_err(|_| {
                 self.refreshing.store(false, Ordering::Relaxed);
-                e
             })?,
             None => {
                 self.refreshing.store(false, Ordering::Relaxed);
@@ -323,9 +322,8 @@ impl HuaweiCodeAgentAuthManager {
             }
         };
 
-        let new_token = self.login(&user, &password).await.map_err(|e| {
+        let new_token = self.login(&user, &password).await.inspect_err(|_| {
             self.refreshing.store(false, Ordering::Relaxed);
-            e
         })?;
 
         self.refreshing.store(false, Ordering::Relaxed);
