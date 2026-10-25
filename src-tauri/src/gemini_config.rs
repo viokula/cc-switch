@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::config::{get_home_dir, write_text_file};
 use crate::error::AppError;
 use serde_json::Value;

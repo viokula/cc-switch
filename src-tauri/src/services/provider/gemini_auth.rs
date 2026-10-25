@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Gemini authentication type detection
 //!
 //! Detects whether a Gemini provider uses PackyCode API Key, Google OAuth, or generic API Key.

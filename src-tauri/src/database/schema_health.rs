@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Check actual columns, not just user_version (branches can share version numbers).
 use super::Database;
 use crate::error::AppError;
