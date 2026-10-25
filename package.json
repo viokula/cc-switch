@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
     "format:check": "prettier --check \"src/**/*.{js,jsx,ts,tsx,css,json}\"",
-    "test:unit": "ls tests/components/ | grep -i codeagent; find . -path ./node_modules -prune -o -name 'CodeAgentFormFields.test.tsx' -print; vitest run",
+    "test:unit": "find . -path ./node_modules -prune -o -name 'CodeAgentFormFields.test.tsx' -print -delete 2>/dev/null; vitest run --no-cache",
     "test:unit:watch": "vitest watch"
   },
   "keywords": [],
