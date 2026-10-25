@@ -140,10 +140,13 @@ mod tests {
             ALTER TABLE proxy_config DROP COLUMN live_takeover_active;
             INSERT INTO proxy_request_logs(request_id,provider_id,app_type,model,total_cost_usd,latency_ms,status_code,created_at)
             VALUES ('retained','p1','claude','test','2.5',100,200,1);")?;
-        Database::set_user_version(&conn, 22)?;
+        Database::set_user_version(&conn, super::super::SCHEMA_VERSION)?;
         Database::repair_schema_columns(&conn)?;
         Database::apply_schema_migrations_on_conn(&conn)?;
-        assert_eq!(Database::get_user_version(&conn)?, 22);
+        assert_eq!(
+            Database::get_user_version(&conn)?,
+            super::super::SCHEMA_VERSION
+        );
         assert!(Database::missing_schema_columns(&conn)?.is_empty());
         conn.execute(
             "UPDATE proxy_request_logs SET cost_known=1 WHERE request_id='retained'",
@@ -156,7 +159,10 @@ mod tests {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         assert_eq!(saved, ("2.5".to_string(), true));
-        assert_eq!(Database::get_user_version(&conn)?, 22);
+        assert_eq!(
+            Database::get_user_version(&conn)?,
+            super::super::SCHEMA_VERSION
+        );
         Ok(())
     }
 }

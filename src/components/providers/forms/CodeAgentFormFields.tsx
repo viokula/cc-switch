@@ -665,7 +665,7 @@ export function ClaudeFormFields({
       modelField: "ANTHROPIC_DEFAULT_HAIKU_MODEL",
       displayNameField: "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
       inputId: "claudeDefaultHaikuModel",
-      supportsOneM: false,
+      supportsOneM: true,
     },
     {
       role: "subagent",
