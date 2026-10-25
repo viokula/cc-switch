@@ -32,6 +32,8 @@ AWS_LC_SYS_CFLAGS=/nologo /MD /Z7 /W3 /we4013
 
 本机全局 pnpm 会根据项目的 packageManager 字段尝试自安装另一个 pnpm 版本，导致 Tauri 的版本检查停住。脚本将 npm_config_manage_package_manager_versions=false 限定在本次进程，已验证 pnpm --version 和 pnpm list ... --json --depth 0 可立即返回，无须等待自动安装。
 
+本机到 `mirrors.ustc.edu.cn` 的 TLS 握手会被企业代理拦在证书吊销检查上（schannel `CRYPT_E_NO_REVOCATION_CHECK (0x80092012)`），cargo 因此拉不到 `prost` 等依赖。脚本设 `CARGO_HTTP_CHECK_REVOKE=false` 关闭 schannel 的吊销检查，依赖即可经 ustc 镜像正常下载。这只绕过吊销检查，不关闭证书校验本身。
+
 ## 验证
 
 ~~~powershell

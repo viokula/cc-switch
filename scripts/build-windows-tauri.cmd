@@ -11,6 +11,7 @@ set "CFLAGS=/nologo /MD /Z7"
 set "AWS_LC_SYS_CFLAGS=/nologo /MD /Z7 /W3 /we4013"
 set "CRATE_CC_NO_DEFAULTS=1"
 set "npm_config_manage_package_manager_versions=false"
+set "CARGO_HTTP_CHECK_REVOKE=false"
 if not defined CARGO_BUILD_JOBS set "CARGO_BUILD_JOBS=1"
 call ".\node_modules\.bin\tauri.cmd" build --no-bundle %*
 set "BUILD_EXIT=%ERRORLEVEL%"
