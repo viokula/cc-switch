@@ -327,8 +327,16 @@ pub fn validate_gemini_settings_strict(settings: &Value) -> Result<(), AppError>
         return Ok(());
     }
 
-    // 如果 env 不为空，检查必需字段 GEMINI_API_KEY
-    if !env_map.contains_key("GEMINI_API_KEY") {
+    // 如果 env 不为空，要有凭据：GEMINI_API_KEY，或者 Vertex 的 GOOGLE_API_KEY /
+    // GOOGLE_GENAI_USE_VERTEXAI（服务账号凭据走 GOOGLE_APPLICATION_CREDENTIALS 或 ADC）。
+    if ![
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+    ]
+    .iter()
+    .any(|key| env_map.contains_key(*key))
+    {
         return Err(AppError::localized(
             "gemini.validation.missing_api_key",
             "Gemini 配置缺少必需字段: GEMINI_API_KEY",
