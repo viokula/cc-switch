@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery } from "@tanstack/react-query";
@@ -66,6 +66,10 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import type { ManagedAuthProvider } from "@/lib/api";
 import { useCopilotAuth, useCodexOauth, useXaiOauth } from "./hooks";
 import { isOAuthProviderType } from "@/config/constants";
+import {
+  getFormExtension,
+  getFormExtensionSaveMeta,
+} from "@/config/formExtensions";
 
 export type ClaudeDesktopProviderFormValues = ProviderFormData & {
   presetId?: string;
@@ -284,6 +288,13 @@ export function ClaudeDesktopProviderForm({
   const [selectedXaiAccountId, setSelectedXaiAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "xai_oauth"));
+  const [selectedExtensionAccountId, setSelectedExtensionAccountId] = useState<
+    string | null
+  >(() =>
+    typeof initialData?.meta?.selectedAccountId === "string"
+      ? initialData.meta.selectedAccountId
+      : null,
+  );
   const [codexFastMode, setCodexFastMode] = useState<boolean>(
     () => initialData?.meta?.codexFastMode ?? false,
   );
@@ -385,12 +396,17 @@ export function ClaudeDesktopProviderForm({
   );
   const activeProviderType =
     activePreset?.providerType ?? initialData?.meta?.providerType;
+<<<<<<< HEAD
   // Codex/xAI OAuth ignore editable URLs and use fixed backend endpoints.
   const usesAutomaticCopilotFormat =
     activeProviderType === "github_copilot" ||
     (activeProviderType !== "codex_oauth" &&
       activeProviderType !== "xai_oauth" &&
       baseUrl.includes("githubcopilot.com"));
+=======
+  const extension = getFormExtension(activeProviderType ?? "");
+  const ExtensionAuthSection = extension?.AuthSection;
+>>>>>>> 4046a9d1 (feat(huawei): CodeAgent 3.0 integration with quota fetch and 8888 proxy removal)
   const { isAuthenticated: isCopilotAuthenticated, accounts: copilotAccounts } =
     useCopilotAuth();
   const {
@@ -407,8 +423,10 @@ export function ClaudeDesktopProviderForm({
     activePreset?.category === "official";
   const usesManagedOAuth =
     activePreset?.requiresOAuth === true ||
-    isOAuthProviderType(activeProviderType);
-  const effectiveMode: "direct" | "proxy" = usesManagedOAuth ? "proxy" : mode;
+    isOAuthProviderType(activeProviderType) ||
+    extension?.skipApiKeyRequired === true;
+  const effectiveMode: "direct" | "proxy" =
+    usesManagedOAuth || extension?.forceDesktopProxy ? "proxy" : mode;
   const needsModelMapping = effectiveMode === "proxy";
   const routes = needsModelMapping ? proxyRoutes : directRoutes;
   const setRoutes = needsModelMapping ? setProxyRoutes : setDirectRoutes;
@@ -566,6 +584,7 @@ export function ClaudeDesktopProviderForm({
     selectedGitHubAccountId,
     selectedCodexAccountId,
     selectedXaiAccountId,
+    selectedExtensionAccountId,
   ]);
 
   const handleFetchManagedModels = async () => {
@@ -606,6 +625,8 @@ export function ClaudeDesktopProviderForm({
         return;
       }
       request = fetchXaiOauthModels(selectedXaiAccountId);
+    } else if (extension?.fetchModels) {
+      request = extension.fetchModels(selectedExtensionAccountId);
     } else {
       return;
     }
@@ -888,6 +909,7 @@ export function ClaudeDesktopProviderForm({
         ? "anthropic"
         : apiFormat;
     const meta: ProviderMeta = {
+      ...extension?.defaultMetaFields,
       ...(initialData?.meta ?? {}),
       claudeDesktopMode: effectiveMode,
       apiFormat:
@@ -900,6 +922,13 @@ export function ClaudeDesktopProviderForm({
 
     meta.claudeDesktopModelRoutes = routeMap;
     meta.providerType = activeProviderType;
+    Object.assign(
+      meta,
+      getFormExtensionSaveMeta(activeProviderType, {
+        appId: "claude-desktop",
+        selectedAccountId: selectedExtensionAccountId,
+      }),
+    );
     meta.authBinding =
       activeProviderType === "github_copilot"
         ? {
@@ -1002,7 +1031,14 @@ export function ClaudeDesktopProviderForm({
           <>
             {usesManagedOAuth ? (
               <div className="rounded-lg border border-border bg-subtle p-3">
-                {activeProviderType === "github_copilot" ? (
+                {ExtensionAuthSection ? (
+                  <Suspense fallback={null}>
+                    <ExtensionAuthSection
+                      selectedAccountId={selectedExtensionAccountId}
+                      onAccountSelect={setSelectedExtensionAccountId}
+                    />
+                  </Suspense>
+                ) : activeProviderType === "github_copilot" ? (
                   <CopilotAuthSection
                     mode="select"
                     selectedAccountId={selectedGitHubAccountId}
@@ -1026,12 +1062,12 @@ export function ClaudeDesktopProviderForm({
                     fastModeEnabled={codexFastMode}
                     onFastModeChange={setCodexFastMode}
                   />
-                ) : (
+                ) : activeProviderType === "xai_oauth" ? (
                   <XaiOAuthSection
                     selectedAccountId={selectedXaiAccountId}
                     onAccountSelect={setSelectedXaiAccountId}
                   />
-                )}
+                ) : null}
               </div>
             ) : (
               <ApiKeySection
