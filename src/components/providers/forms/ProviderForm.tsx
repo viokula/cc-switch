@@ -1922,13 +1922,19 @@ function ProviderFormFull({
     const presetDeclaredProviderType =
       (selectedPresetEntry?.preset as { providerType?: string } | undefined)
         ?.providerType ?? initialProviderType;
+    const inheritedPresetProviderType =
+      presetDeclaredProviderType === "codex_oauth" ||
+      presetDeclaredProviderType === "xai_oauth" ||
+      presetDeclaredProviderType === "github_copilot"
+        ? undefined
+        : presetDeclaredProviderType;
     const providerType = isCopilotProvider
       ? "github_copilot"
       : isClaudeCodexOauthProvider || isCodexOfficialManagedOauthBound
         ? "codex_oauth"
         : isXaiOauthProvider
           ? "xai_oauth"
-          : presetDeclaredProviderType;
+          : inheritedPresetProviderType;
 
     const extensionMeta = getFormExtensionSaveMeta(providerType, {
       appId,

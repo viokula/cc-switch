@@ -71,8 +71,7 @@ export function CodexAuthSettings({
   };
 
   useEffect(() => {
-    if (!classicSubagents) {
-      setForcesMultiAgentV2(false);
+    if (classicSubagents) {
       return;
     }
     let cancelled = false;
@@ -176,22 +175,26 @@ export function CodexAuthSettings({
         onCheckedChange={handleUnifyHistoryChange}
       />
 
-      <SettingsSwitchRow
-        label={t("settings.codexStackClassicSubagents")}
-        help={{
-          title: t("settings.codexStackClassicSubagents"),
-          body: t("settings.codexStackClassicSubagentsDescription"),
-        }}
-        description={
-          forcesMultiAgentV2 ? (
-            <span className="text-warning-text">
-              {t("settings.codexStackClassicSubagentsForcedV2")}
-            </span>
-          ) : undefined
-        }
-        checked={classicSubagents}
-        onCheckedChange={(value) => onChange({ codexStackClassicTools: value })}
-      />
+      {!classicSubagents && (
+        <SettingsSwitchRow
+          label={t("settings.codexStackClassicSubagents")}
+          help={{
+            title: t("settings.codexStackClassicSubagents"),
+            body: t("settings.codexStackClassicSubagentsDescription"),
+          }}
+          description={
+            forcesMultiAgentV2 ? (
+              <span className="text-warning-text">
+                {t("settings.codexStackClassicSubagentsForcedV2")}
+              </span>
+            ) : undefined
+          }
+          checked={classicSubagents}
+          onCheckedChange={(value) =>
+            onChange({ codexStackClassicTools: value })
+          }
+        />
+      )}
 
       <SettingsSwitchRow
         label={t("settings.codexSessionCompression")}
