@@ -148,6 +148,10 @@ import { resolveManagedAccountId } from "@/lib/authBinding";
 import { useOpenClawLiveProviderIds } from "@/hooks/useOpenClaw";
 import { useHermesLiveProviderIds } from "@/hooks/useHermes";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
+import {
+  getFormExtension,
+  getFormExtensionSaveMeta,
+} from "@/config/formExtensions";
 
 type PresetEntry = {
   id: string;
@@ -683,6 +687,13 @@ function ProviderFormFull({
   >(() => resolveManagedAccountId(initialData?.meta, "codex_oauth"));
   const [hasValidCodexOfficialSelection, setHasValidCodexOfficialSelection] =
     useState(true);
+  const [selectedExtensionAccountId, setSelectedExtensionAccountId] = useState<
+    string | null
+  >(
+    typeof initialData?.meta?.selectedAccountId === "string"
+      ? initialData.meta.selectedAccountId
+      : null,
+  );
   const [selectedXaiAccountId, setSelectedXaiAccountId] = useState<
     string | null
   >(() => resolveManagedAccountId(initialData?.meta, "xai_oauth"));
@@ -1046,6 +1057,10 @@ function ProviderFormFull({
     getSettingsConfig,
     onConfigChange: handleSettingsConfigChange,
   });
+
+  const extension = getFormExtension(
+    templatePreset?.providerType ?? initialData?.meta?.providerType ?? "",
+  );
 
   const {
     geminiEnv,
@@ -1655,6 +1670,7 @@ function ProviderFormFull({
         if (
           !isCopilotProviderAtSubmit &&
           !isClaudeCodexOauthProvider &&
+          !extension?.skipApiKeyRequired &&
           !isXaiOauthProvider &&
           !submitApiKey.trim()
         ) {
@@ -1968,13 +1984,25 @@ function ProviderFormFull({
       (appId === "claude" &&
         (hasManagedCopilotIdentity ||
           readSubmitTimeCredentials().baseUrl.includes("githubcopilot.com")));
+    // Preserve extension provider identity so backend authentication remains active.
+    const presetDeclaredProviderType =
+      (selectedPresetEntry?.preset as { providerType?: string } | undefined)
+        ?.providerType ?? initialProviderType;
     const providerType = isCopilotProviderForSubmit
       ? "github_copilot"
       : isClaudeCodexOauthProvider || isCodexOfficialManagedOauthBound
         ? "codex_oauth"
         : isXaiOauthProvider
           ? "xai_oauth"
-          : undefined;
+          : presetDeclaredProviderType;
+
+    const extensionMeta = getFormExtensionSaveMeta(providerType, {
+      appId,
+      presetAppTarget: (
+        selectedPresetEntry?.preset as { appTarget?: string } | undefined
+      )?.appTarget,
+      selectedAccountId: selectedExtensionAccountId,
+    });
 
     // 动过列表才存；清空了存空列表（什么都不发布），和没配（跟着映射）区分开。
     const stackModels =
@@ -1983,6 +2011,7 @@ function ProviderFormFull({
         : undefined;
 
     const nextMeta: ProviderMeta = {
+      ...getFormExtension(providerType ?? "")?.defaultMetaFields,
       ...(baseMeta ?? {}),
       opencodeConfigFormat: isNativeOpencode ? "v2" : undefined,
       // Claude Code、Codex、Gemini CLI 的通用配置片段已冻结：沿用行里原有的标记，新增时
@@ -1995,6 +2024,7 @@ function ProviderFormFull({
       claudeDesktopMode: undefined,
       // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
       providerType,
+      ...extensionMeta,
       authBinding: isCopilotProviderForSubmit
         ? {
             source: "managed_account",
@@ -2716,7 +2746,8 @@ function ProviderFormFull({
                 templatePreset?.requiresOAuth === true ||
                 isCopilotProvider ||
                 isClaudeCodexOauthProvider ||
-                isXaiOauthProvider
+                isXaiOauthProvider ||
+                extension?.skipApiKeyRequired === true
               }
               isCopilotAuthenticated={isCopilotAuthenticated}
               selectedGitHubAccountId={selectedGitHubAccountId}
@@ -2727,6 +2758,10 @@ function ProviderFormFull({
               onCodexAccountSelect={setSelectedCodexAccountId}
               codexFastMode={codexFastMode}
               onCodexFastModeChange={setCodexFastMode}
+              extensionAuthSection={extension?.AuthSection}
+              extensionFetchModels={extension?.fetchModels}
+              selectedExtensionAccountId={selectedExtensionAccountId}
+              onExtensionAccountSelect={setSelectedExtensionAccountId}
               isXaiOauthAuthenticated={isXaiOauthAuthenticated}
               selectedXaiAccountId={selectedXaiAccountId}
               onXaiAccountSelect={setSelectedXaiAccountId}

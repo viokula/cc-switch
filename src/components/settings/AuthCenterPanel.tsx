@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { CopilotAuthSection } from "@/components/providers/forms/CopilotAuthSection";
 import { CodexOAuthSection } from "@/components/providers/forms/CodexOAuthSection";
@@ -9,6 +9,7 @@ import { KimiAccountLogin } from "@/components/providers/KimiAccountLogin";
 import { DshAccountLogin } from "@/components/providers/DshAccount";
 import { isMac } from "@/lib/platform";
 import type { AuthCenterTarget } from "@/lib/api";
+import { getAuthCenterSections } from "@/config/authCenterRegistry";
 
 interface AuthCenterPanelProps {
   authScrollTarget?: AuthCenterTarget | null;
@@ -176,6 +177,12 @@ export function AuthCenterPanel({
           <AgyOAuthSection helpSide="top" />
         </div>
       )}
+
+      {getAuthCenterSections().map(({ id, Component }) => (
+        <React.Suspense key={id} fallback={null}>
+          <Component />
+        </React.Suspense>
+      ))}
     </div>
   );
 }

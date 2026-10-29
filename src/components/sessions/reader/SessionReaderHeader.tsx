@@ -1,3 +1,4 @@
+import { usageCostLabel } from "@/components/usage/format";
 import { memo, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -516,7 +517,7 @@ const Sep = () => (
  * 没导入过（扫描关着、超过 30 天被汇总、应用没有用量来源）时不显示。
  */
 function SessionUsageSummary({ session }: { session: SessionMeta }) {
-  const { i18n } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { money } = useMoneyFormat();
   const rt = useReaderT();
   const { data } = useSessionUsageSummary(
@@ -545,7 +546,12 @@ function SessionUsageSummary({ session }: { session: SessionMeta }) {
         {cost !== null && (
           <>
             {" · "}
-            {money(cost, 2)}
+            {usageCostLabel(
+              cost,
+              data.costIncomplete,
+              money(cost, 2),
+              t("usage.unpriced"),
+            )}
           </>
         )}
       </span>

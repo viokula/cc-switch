@@ -22,6 +22,8 @@ use std::sync::LazyLock;
 pub struct UsageSummary {
     pub total_requests: u64,
     pub total_cost: String,
+    #[serde(default)]
+    pub cost_incomplete: bool,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
     pub total_cache_creation_tokens: u64,
@@ -89,6 +91,7 @@ fn usage_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<UsageSumm
     Ok(UsageSummary {
         total_requests: total_requests as u64,
         total_cost: format!("{total_cost:.6}"),
+        cost_incomplete: row.get(7)?,
         total_input_tokens: total_input_tokens as u64,
         total_output_tokens: total_output_tokens as u64,
         total_cache_creation_tokens: total_cache_creation_tokens as u64,
@@ -106,6 +109,8 @@ pub struct DailyStats {
     pub date: String,
     pub request_count: u64,
     pub total_cost: String,
+    #[serde(default)]
+    pub cost_incomplete: bool,
     pub total_tokens: u64,
     pub total_input_tokens: u64,
     pub total_output_tokens: u64,
@@ -124,6 +129,8 @@ pub struct ProviderStats {
     /// 真实消耗 Tokens（新增输入 + 输出 + 缓存写入 + 缓存命中），与指标卡同口径。
     pub total_tokens: u64,
     pub total_cost: String,
+    #[serde(default)]
+    pub cost_incomplete: bool,
     pub success_rate: f32,
     pub avg_latency_ms: u64,
     /// 速度的分子：满足条件（有首字、输出 >= 100 token、耗时 > 首字）的明细请求的输出 token 之和。
@@ -257,6 +264,8 @@ pub struct ModelStats {
     /// 真实消耗 Tokens（新增输入 + 输出 + 缓存写入 + 缓存命中），与指标卡同口径。
     pub total_tokens: u64,
     pub total_cost: String,
+    #[serde(default)]
+    pub cost_incomplete: bool,
     pub avg_cost_per_request: String,
     pub success_rate: f32,
     /// 速度的分子分母，口径同 [`ProviderStats::speed_output_tokens`] 那四个字段。
@@ -316,6 +325,8 @@ pub struct RequestLogDetail {
     pub cache_read_cost_usd: String,
     pub cache_creation_cost_usd: String,
     pub total_cost_usd: String,
+    #[serde(default)]
+    pub cost_known: bool,
     pub is_streaming: bool,
     pub latency_ms: u64,
     pub first_token_ms: Option<u64>,
@@ -330,15 +341,15 @@ pub struct RequestLogDetail {
     pub pricing_model: Option<String>,
 }
 
-/// 把 26 列的查询结果映射为 `RequestLogDetail`。
+/// 把 27 列的查询结果映射为 `RequestLogDetail`。
 ///
-/// 调用方的 SELECT **必须**按以下顺序返回 26 列：
+/// 调用方的 SELECT **必须**按以下顺序返回 27 列：
 /// `request_id, provider_id, provider_name, app_type, model, request_model,
 ///  cost_multiplier, input_tokens, output_tokens, cache_read_tokens,
 ///  cache_creation_tokens, input_cost_usd, output_cost_usd, cache_read_cost_usd,
 ///  cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
 ///  first_token_ms, duration_ms, status_code, error_message, created_at,
-///  data_source, pricing_model, input_token_semantics`
+///  data_source, pricing_model, input_token_semantics, cost_known`
 ///
 /// 不需要 provider_name 时（如 backfill）SELECT `NULL AS provider_name` 占位即可。
 fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestLogDetail> {
@@ -371,6 +382,7 @@ fn row_to_request_log_detail(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reques
         data_source: row.get(23)?,
         pricing_model: row.get(24)?,
         input_token_semantics: row.get::<_, i64>(25)?,
+        cost_known: row.get::<_, Option<bool>>(26)?.unwrap_or(false),
     })
 }
 
@@ -952,6 +964,7 @@ impl Database {
         model: Option<&str>,
     ) -> Result<UsageSummary, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         // Build detail WHERE clause
         let mut conditions = vec![effective_usage_log_filter_for_range(
@@ -1036,7 +1049,8 @@ impl Database {
                 COALESCE(d.total_output_tokens, 0) + COALESCE(r.total_output_tokens, 0),
                 COALESCE(d.total_cache_creation_tokens, 0) + COALESCE(r.total_cache_creation_tokens, 0),
                 COALESCE(d.total_cache_read_tokens, 0) + COALESCE(r.total_cache_read_tokens, 0),
-                COALESCE(d.success_count, 0) + COALESCE(r.success_count, 0)
+                COALESCE(d.success_count, 0) + COALESCE(r.success_count, 0),
+                MAX(d.cost_incomplete, r.cost_incomplete)
             FROM
                 (SELECT
                     COUNT(*) as total_requests,
@@ -1045,7 +1059,8 @@ impl Database {
                     COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
-                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
+                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
                  FROM proxy_request_logs l {detail_join} {where_clause}) d,
                 (SELECT
                     COALESCE(SUM(r.request_count), 0) as total_requests,
@@ -1054,7 +1069,8 @@ impl Database {
                     COALESCE(SUM(r.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(r.cache_creation_tokens), 0) as total_cache_creation_tokens,
                     COALESCE(SUM(r.cache_read_tokens), 0) as total_cache_read_tokens,
-                    COALESCE(SUM(r.success_count), 0) as success_count
+                    COALESCE(SUM(r.success_count), 0) as success_count,
+                    COALESCE(MAX(r.cost_incomplete), 0) as cost_incomplete
                  FROM usage_daily_rollups r {rollup_join} {rollup_where}) r"
         );
 
@@ -1079,6 +1095,7 @@ impl Database {
         session_id: &str,
     ) -> Result<UsageSummary, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
         let fresh_input = fresh_input_sql("l");
         let app_type_expr = folded_app_type_sql("l.app_type");
         let data_source = data_source_expr("l");
@@ -1090,7 +1107,8 @@ impl Database {
                 COALESCE(SUM(l.output_tokens), 0),
                 COALESCE(SUM(l.cache_creation_tokens), 0),
                 COALESCE(SUM(l.cache_read_tokens), 0),
-                COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0)
+                COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0),
+                COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0)
              FROM proxy_request_logs l
              WHERE l.session_id = ?1 AND {app_type_expr} = ?2 AND {data_source} <> 'proxy'"
         );
@@ -1117,6 +1135,7 @@ impl Database {
         model: Option<&str>,
     ) -> Result<Vec<UsageSummaryByApp>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let mut detail_conditions = vec![effective_usage_log_filter_for_range(
             &conn, "l", start_date, end_date,
@@ -1187,7 +1206,8 @@ impl Database {
                 SUM(output_t) as output_t,
                 SUM(cache_create_t) as cache_create_t,
                 SUM(cache_read_t) as cache_read_t,
-                SUM(success_count) as success_count
+                SUM(success_count) as success_count,
+                MAX(cost_incomplete) as cost_incomplete
             FROM (
                 SELECT {detail_app_type} as app_type,
                     COUNT(*) as req_count,
@@ -1196,7 +1216,8 @@ impl Database {
                     COALESCE(SUM(l.output_tokens), 0) as output_t,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as cache_create_t,
                     COALESCE(SUM(l.cache_read_tokens), 0) as cache_read_t,
-                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count
+                    COALESCE(SUM(CASE WHEN l.status_code >= 200 AND l.status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
                 FROM proxy_request_logs l {detail_join} {detail_where}
                 GROUP BY l.app_type
                 UNION ALL
@@ -1207,7 +1228,8 @@ impl Database {
                     COALESCE(SUM(r.output_tokens), 0),
                     COALESCE(SUM(r.cache_creation_tokens), 0),
                     COALESCE(SUM(r.cache_read_tokens), 0),
-                    COALESCE(SUM(r.success_count), 0)
+                    COALESCE(SUM(r.success_count), 0),
+                    COALESCE(MAX(r.cost_incomplete), 0)
                 FROM usage_daily_rollups r {rollup_join} {rollup_where}
                 GROUP BY r.app_type
             )
@@ -1246,6 +1268,7 @@ impl Database {
                 summary: UsageSummary {
                     total_requests: total_requests as u64,
                     total_cost: format!("{total_cost:.6}"),
+                    cost_incomplete: row.get(8)?,
                     total_input_tokens: total_input_tokens as u64,
                     total_output_tokens: total_output_tokens as u64,
                     total_cache_creation_tokens: total_cache_creation_tokens as u64,
@@ -1283,6 +1306,7 @@ impl Database {
         model: Option<&str>,
     ) -> Result<Vec<DailyStats>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let end_ts = end_date.unwrap_or_else(|| Local::now().timestamp());
         let mut start_ts = start_date.unwrap_or_else(|| end_ts - 24 * 60 * 60);
@@ -1341,7 +1365,8 @@ impl Database {
                     COALESCE(SUM({fresh_input}), 0) as total_input_tokens,
                     COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                     COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
-                    COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
+                    COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
                 FROM proxy_request_logs l {detail_join}
                 WHERE l.created_at >= ?1 AND l.created_at <= ?2
                   AND {effective_filter} {extra_filter}
@@ -1357,6 +1382,7 @@ impl Database {
                         date: String::new(),
                         request_count: row.get::<_, i64>(1)? as u64,
                         total_cost: format!("{:.6}", row.get::<_, f64>(2)?),
+                        cost_incomplete: row.get(8)?,
                         total_tokens: row.get::<_, i64>(3)? as u64,
                         total_input_tokens: row.get::<_, i64>(4)? as u64,
                         total_output_tokens: row.get::<_, i64>(5)? as u64,
@@ -1402,6 +1428,7 @@ impl Database {
                         date,
                         request_count: 0,
                         total_cost: "0.000000".to_string(),
+                        cost_incomplete: false,
                         total_tokens: 0,
                         total_input_tokens: 0,
                         total_output_tokens: 0,
@@ -1455,7 +1482,8 @@ impl Database {
                 COALESCE(SUM({fresh_input}), 0) as total_input_tokens,
                 COALESCE(SUM(l.output_tokens), 0) as total_output_tokens,
                 COALESCE(SUM(l.cache_creation_tokens), 0) as total_cache_creation_tokens,
-                COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens
+                COALESCE(SUM(l.cache_read_tokens), 0) as total_cache_read_tokens,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
             FROM proxy_request_logs l {detail_join}
             WHERE l.created_at >= ?1 AND l.created_at <= ?2
               AND {effective_filter} {extra_filter}
@@ -1471,6 +1499,7 @@ impl Database {
                     date: String::new(),
                     request_count: row.get::<_, i64>(1)? as u64,
                     total_cost: format!("{:.6}", row.get::<_, f64>(2)?),
+                    cost_incomplete: row.get(8)?,
                     total_tokens: row.get::<_, i64>(3)? as u64,
                     total_input_tokens: row.get::<_, i64>(4)? as u64,
                     total_output_tokens: row.get::<_, i64>(5)? as u64,
@@ -1538,7 +1567,8 @@ impl Database {
                 COALESCE(SUM({fresh_input_rollup}), 0),
                 COALESCE(SUM(r.output_tokens), 0),
                 COALESCE(SUM(r.cache_creation_tokens), 0),
-                COALESCE(SUM(r.cache_read_tokens), 0)
+                COALESCE(SUM(r.cache_read_tokens), 0),
+                COALESCE(MAX(r.cost_incomplete), 0)
             FROM usage_daily_rollups r {rollup_join}
             {rollup_where}
             GROUP BY r.date
@@ -1557,6 +1587,7 @@ impl Database {
                     row.get::<_, i64>(5)? as u64,
                     row.get::<_, i64>(6)? as u64,
                     row.get::<_, i64>(7)? as u64,
+                    row.get::<_, bool>(8)?,
                 ),
             ))
         };
@@ -1565,19 +1596,21 @@ impl Database {
         let rollup_rows = rollup_stmt.query_map(rollup_param_refs.as_slice(), rollup_row_mapper)?;
 
         for row in rollup_rows {
-            let (bucket_date, (req, cost, tok, inp, out, cc, cr)) = row?;
+            let (bucket_date, (req, cost, tok, inp, out, cc, cr, incomplete)) = row?;
             let date = NaiveDate::parse_from_str(&bucket_date, "%Y-%m-%d")
                 .map_err(|err| AppError::Database(format!("解析 rollup 趋势日期失败: {err}")))?;
             let entry = map.entry(date).or_insert_with(|| DailyStats {
                 date: String::new(),
                 request_count: 0,
                 total_cost: "0.000000".to_string(),
+                cost_incomplete: false,
                 total_tokens: 0,
                 total_input_tokens: 0,
                 total_output_tokens: 0,
                 total_cache_creation_tokens: 0,
                 total_cache_read_tokens: 0,
             });
+            entry.cost_incomplete |= incomplete;
             entry.request_count += req;
             let existing_cost: f64 = entry.total_cost.parse().unwrap_or(0.0);
             entry.total_cost = format!("{:.6}", existing_cost + cost);
@@ -1601,6 +1634,7 @@ impl Database {
                     date,
                     request_count: 0,
                     total_cost: "0.000000".to_string(),
+                    cost_incomplete: false,
                     total_tokens: 0,
                     total_input_tokens: 0,
                     total_output_tokens: 0,
@@ -1719,6 +1753,7 @@ impl Database {
         model: Option<&str>,
     ) -> Result<Vec<ProviderStats>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let mut detail_conditions = vec![effective_usage_log_filter_for_range(
             &conn, "l", start_date, end_date,
@@ -1797,7 +1832,8 @@ impl Database {
                 SUM(speed_output) as speed_output,
                 SUM(speed_gen_ms) as speed_gen_ms,
                 SUM(est_output) as est_output,
-                SUM(est_ms) as est_ms
+                SUM(est_ms) as est_ms,
+                MAX(cost_incomplete) as cost_incomplete
             FROM (
                 SELECT l.provider_id, l.app_type,
                     {detail_pname} as provider_name,
@@ -1809,7 +1845,8 @@ impl Database {
                     COALESCE(SUM(CASE WHEN {speed_ok} THEN l.output_tokens ELSE 0 END), 0) as speed_output,
                     COALESCE(SUM(CASE WHEN {speed_ok} THEN l.latency_ms - l.first_token_ms ELSE 0 END), 0) as speed_gen_ms,
                     COALESCE(SUM(CASE WHEN {est_ok} THEN l.output_tokens ELSE 0 END), 0) as est_output,
-                    COALESCE(SUM(CASE WHEN {est_ok} THEN l.latency_ms ELSE 0 END), 0) as est_ms
+                    COALESCE(SUM(CASE WHEN {est_ok} THEN l.latency_ms ELSE 0 END), 0) as est_ms,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
                 FROM proxy_request_logs l
                 LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
                 {detail_where}
@@ -1825,7 +1862,8 @@ impl Database {
                     0,
                     0,
                     0,
-                    0
+                    0,
+                    COALESCE(MAX(r.cost_incomplete), 0)
                 FROM usage_daily_rollups r
                 LEFT JOIN providers p2 ON r.provider_id = p2.id AND r.app_type = p2.app_type
                 {rollup_where}
@@ -1875,6 +1913,7 @@ impl Database {
             };
 
             Ok(ProviderStats {
+                cost_incomplete: row.get(12)?,
                 provider_id,
                 app_type,
                 provider_name: row.get(2)?,
@@ -1912,6 +1951,7 @@ impl Database {
         model: Option<&str>,
     ) -> Result<Vec<ModelStats>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let mut detail_conditions = vec![effective_usage_log_filter_for_range(
             &conn, "l", start_date, end_date,
@@ -2002,7 +2042,8 @@ impl Database {
                 SUM(speed_output) as speed_output,
                 SUM(speed_gen_ms) as speed_gen_ms,
                 SUM(est_output) as est_output,
-                SUM(est_ms) as est_ms
+                SUM(est_ms) as est_ms,
+                MAX(cost_incomplete) as cost_incomplete
             FROM (
                 SELECT {detail_model} as model,
                     COUNT(*) as request_count,
@@ -2012,7 +2053,8 @@ impl Database {
                     COALESCE(SUM(CASE WHEN {speed_ok} THEN l.output_tokens ELSE 0 END), 0) as speed_output,
                     COALESCE(SUM(CASE WHEN {speed_ok} THEN l.latency_ms - l.first_token_ms ELSE 0 END), 0) as speed_gen_ms,
                     COALESCE(SUM(CASE WHEN {est_ok} THEN l.output_tokens ELSE 0 END), 0) as est_output,
-                    COALESCE(SUM(CASE WHEN {est_ok} THEN l.latency_ms ELSE 0 END), 0) as est_ms
+                    COALESCE(SUM(CASE WHEN {est_ok} THEN l.latency_ms ELSE 0 END), 0) as est_ms,
+                    COALESCE(MAX(1 - COALESCE(l.cost_known, 0)), 0) as cost_incomplete
                 FROM proxy_request_logs l
                 {detail_join}
                 {detail_where}
@@ -2026,7 +2068,8 @@ impl Database {
                     0,
                     0,
                     0,
-                    0
+                    0,
+                    COALESCE(MAX(r.cost_incomplete), 0)
                 FROM usage_daily_rollups r
                 {rollup_join}
                 {rollup_where}
@@ -2079,6 +2122,7 @@ impl Database {
             };
 
             Ok(ModelStats {
+                cost_incomplete: row.get(9)?,
                 model,
                 request_count: request_count as u64,
                 total_tokens: row.get::<_, i64>(2)? as u64,
@@ -2112,6 +2156,7 @@ impl Database {
         page_size: u32,
     ) -> Result<PaginatedLogs, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let mut conditions = vec![effective_usage_log_filter_for_range(
             &conn,
@@ -2196,7 +2241,7 @@ impl Database {
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
-                    l.input_token_semantics
+                    l.input_token_semantics, l.cost_known
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              {where_clause}
@@ -2231,6 +2276,7 @@ impl Database {
         request_id: &str,
     ) -> Result<Option<RequestLogDetail>, AppError> {
         let conn = lock_conn!(self.conn);
+        Self::resolve_pending_usage_costs(&conn)?;
 
         let detail_pname = provider_name_coalesce("l", "p");
         let detail_sql = format!(
@@ -2240,7 +2286,7 @@ impl Database {
                     l.input_cost_usd, l.output_cost_usd, l.cache_read_cost_usd, l.cache_creation_cost_usd, l.total_cost_usd,
                     l.is_streaming, l.latency_ms, l.first_token_ms, l.duration_ms,
                     l.status_code, l.error_message, l.created_at, l.data_source, l.pricing_model,
-                    l.input_token_semantics
+                    l.input_token_semantics, l.cost_known
              FROM proxy_request_logs l
              LEFT JOIN providers p ON l.provider_id = p.id AND l.app_type = p.app_type
              WHERE l.request_id = ?"
@@ -2385,9 +2431,27 @@ impl Database {
         Self::backfill_missing_usage_costs_on_conn(&conn, Some(model_id))
     }
 
+    pub(crate) fn resolve_pending_usage_costs(conn: &Connection) -> Result<(), AppError> {
+        conn.execute("UPDATE proxy_request_logs SET cost_known = 1 WHERE cost_known IS NULL AND (CAST(total_cost_usd AS REAL) > 0 OR (input_tokens = 0 AND output_tokens = 0 AND cache_read_tokens = 0 AND cache_creation_tokens = 0))", [])?;
+        Self::backfill_usage_costs_on_conn(conn, None, true)?;
+        conn.execute(
+            "UPDATE proxy_request_logs SET cost_known = 0 WHERE cost_known IS NULL",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn backfill_missing_usage_costs_on_conn(
         conn: &Connection,
         only_model_id: Option<&str>,
+    ) -> Result<u64, AppError> {
+        Self::backfill_usage_costs_on_conn(conn, only_model_id, false)
+    }
+
+    fn backfill_usage_costs_on_conn(
+        conn: &Connection,
+        only_model_id: Option<&str>,
+        only_pending: bool,
     ) -> Result<u64, AppError> {
         const BASE_SQL: &str =
             "SELECT request_id, provider_id, NULL AS provider_name, app_type, model, request_model,
@@ -2396,14 +2460,19 @@ impl Database {
                         input_cost_usd, output_cost_usd, cache_read_cost_usd,
                         cache_creation_cost_usd, total_cost_usd, is_streaming, latency_ms,
                         first_token_ms, duration_ms, status_code, error_message, created_at,
-                        data_source, pricing_model, input_token_semantics
+                        data_source, pricing_model, input_token_semantics, cost_known
              FROM proxy_request_logs
              WHERE CAST(total_cost_usd AS REAL) <= 0
                AND (input_tokens > 0 OR output_tokens > 0
                     OR cache_read_tokens > 0 OR cache_creation_tokens > 0)";
 
         let mut logs = {
-            let mut stmt = conn.prepare(BASE_SQL)?;
+            let sql = if only_pending {
+                format!("{BASE_SQL} AND cost_known IS NULL")
+            } else {
+                format!("{BASE_SQL} AND COALESCE(cost_known, 0) = 0")
+            };
+            let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], row_to_request_log_detail)?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -2456,7 +2525,7 @@ impl Database {
             || log.cache_read_tokens > 0
             || log.cache_creation_tokens > 0;
 
-        if has_cost || !has_usage {
+        if log.cost_known || has_cost || !has_usage {
             return Ok(false);
         }
 
@@ -2512,6 +2581,7 @@ impl Database {
         log.cache_read_cost_usd = format!("{cache_read_cost:.6}");
         log.cache_creation_cost_usd = format!("{cache_creation_cost:.6}");
         log.total_cost_usd = format!("{total_cost:.6}");
+        log.cost_known = true;
 
         conn.execute(
             "UPDATE proxy_request_logs
@@ -2519,7 +2589,7 @@ impl Database {
                  output_cost_usd = ?2,
                  cache_read_cost_usd = ?3,
                  cache_creation_cost_usd = ?4,
-                 total_cost_usd = ?5
+                 total_cost_usd = ?5, cost_known = 1
              WHERE request_id = ?6",
             params![
                 log.input_cost_usd,
@@ -2987,6 +3057,129 @@ mod tests {
                 data_source
             ],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn cost_knowledge_distinguishes_missing_free_and_mixed_usage() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let now = chrono::Utc::now().timestamp();
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO model_pricing(model_id,display_name,input_cost_per_million,output_cost_per_million,cache_read_cost_per_million,cache_creation_cost_per_million) VALUES ('test-free','Free','0','0','0','0')", [])?;
+            for (id, model, cost) in [
+                ("missing", "test-unpriced-unique", "0"),
+                ("free", "test-free", "0"),
+                ("paid", "test-paid", "2.5"),
+            ] {
+                insert_usage_log(
+                    &conn, id, "claude", "p1", model, "proxy", now, 100, 50, 0, 0, 200, cost,
+                )?;
+            }
+        }
+        assert!(!db.get_request_detail("missing")?.unwrap().cost_known);
+        assert!(db.get_request_detail("free")?.unwrap().cost_known);
+        assert!(db.get_request_detail("paid")?.unwrap().cost_known);
+        let summary = db.get_usage_summary(None, None, None, None, None)?;
+        assert!(summary.cost_incomplete);
+        assert_eq!(summary.total_cost, "2.500000");
+        assert_eq!(summary.total_requests, 3);
+        assert_eq!(summary.real_total_tokens, 450);
+        assert!(
+            db.get_usage_summary_by_app(None, None, None, None)?[0]
+                .summary
+                .cost_incomplete
+        );
+        assert!(db.get_provider_stats(None, None, None, None, None)?[0].cost_incomplete);
+        let models = db.get_model_stats(None, None, None, None, None)?;
+        assert!(
+            !models
+                .iter()
+                .find(|m| m.model == "test-free")
+                .unwrap()
+                .cost_incomplete
+        );
+        assert!(
+            models
+                .iter()
+                .find(|m| m.model == "test-unpriced-unique")
+                .unwrap()
+                .cost_incomplete
+        );
+        for start in [now - 3600, now - 86400 * 2] {
+            assert!(db
+                .get_daily_trends(Some(start), Some(now + 1), None, None, None)?
+                .iter()
+                .any(|d| d.cost_incomplete));
+        }
+        // Adding the actual price repairs both the record and aggregate completeness.
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("INSERT INTO model_pricing(model_id,display_name,input_cost_per_million,output_cost_per_million,cache_read_cost_per_million,cache_creation_cost_per_million) VALUES ('test-unpriced-unique','New','1','2','0','0')", [])?;
+        }
+        assert_eq!(db.backfill_missing_usage_costs()?, 1);
+        assert_eq!(db.backfill_missing_usage_costs()?, 0);
+        assert!(
+            !db.get_usage_summary(None, None, None, None, None)?
+                .cost_incomplete
+        );
+        assert_eq!(
+            db.get_request_detail("missing")?.unwrap().total_cost_usd,
+            "0.000200"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cost_knowledge_survives_pruning_and_rollup_merge() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        let old = chrono::Utc::now().timestamp() - 45 * 86400;
+        {
+            let conn = db.conn.lock().unwrap();
+            insert_usage_log(
+                &conn,
+                "old-unknown",
+                "claude",
+                "p1",
+                "test-unpriced-rollup",
+                "proxy",
+                old,
+                100,
+                50,
+                0,
+                0,
+                200,
+                "0",
+            )?;
+        }
+        assert_eq!(db.rollup_and_prune(30)?, 1);
+        {
+            let conn = db.conn.lock().unwrap();
+            insert_usage_log(
+                &conn,
+                "old-known",
+                "claude",
+                "p1",
+                "test-unpriced-rollup",
+                "proxy",
+                old,
+                100,
+                50,
+                0,
+                0,
+                200,
+                "1",
+            )?;
+        }
+        assert_eq!(db.rollup_and_prune(30)?, 1);
+        let summary = db.get_usage_summary(None, None, None, None, None)?;
+        assert!(summary.cost_incomplete);
+        assert_eq!(summary.total_requests, 2);
+        assert_eq!(summary.total_cost, "1.000000");
+        assert!(db
+            .get_daily_trends(Some(old - 86400), Some(old + 86400), None, None, None)?
+            .iter()
+            .any(|d| d.cost_incomplete));
         Ok(())
     }
 
