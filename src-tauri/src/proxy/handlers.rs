@@ -763,7 +763,7 @@ async fn handle_claude_transform(
         std::time::Duration::ZERO
     };
     let enforce_codex_web_search_limit_while_aggregating =
-        aggregate_responses_sse && hosted_web_search_max_uses.is_some();
+        aggregate_codex_oauth_responses_sse && hosted_web_search_max_uses.is_some();
     let (mut response_headers, direct_anthropic_response, upstream_response) =
         if enforce_codex_web_search_limit_while_aggregating {
             if let Some(encoding) = get_content_encoding(response.headers()) {
@@ -787,7 +787,7 @@ async fn handle_claude_transform(
             let (response_headers, _status, body_bytes) =
                 read_decoded_body(response, ctx.tag, body_timeout).await?;
             let body_str = String::from_utf8_lossy(&body_bytes);
-            let upstream_response = if aggregate_responses_sse {
+            let upstream_response = if aggregate_codex_oauth_responses_sse {
                 responses_sse_to_response_value(&body_str)?
             } else if aggregate_extension_chat_sse && body_looks_like_sse(&body_str) {
                 chat_sse_to_response_value(&body_str).map_err(|error| {

@@ -681,7 +681,6 @@ fn detect_upstream_error(body: &Value) -> Option<ProxyError> {
     }
     None
 }
-}
 
 /// OpenAI 响应 → Anthropic 响应
 pub fn openai_to_anthropic(body: Value) -> Result<Value, ProxyError> {
