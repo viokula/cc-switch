@@ -341,6 +341,9 @@ impl LocalProxy {
 }
 
 async fn local_proxy(reply: ProxyReply) -> LocalProxy {
+    // nextest runs each test in its own process; the app installs the rustls
+    // provider at startup (lib.rs), tests touching TLS connectors must too.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let connections = Arc::new(AtomicUsize::new(0));
