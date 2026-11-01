@@ -7,6 +7,8 @@ use std::pin::Pin;
 use std::sync::{LazyLock, RwLock};
 use tauri::AppHandle;
 
+type AuthHeadersFuture = Pin<Box<dyn Future<Output = Vec<(String, String)>> + Send>>;
+
 pub trait ProxyHook: Send + Sync {
     fn matches_provider(&self, _meta: &ProviderMeta) -> bool {
         false
@@ -21,7 +23,7 @@ pub trait ProxyHook: Send + Sync {
         _meta: &ProviderMeta,
         _app_handle: Option<&AppHandle>,
         _body: Option<&Value>,
-    ) -> Pin<Box<dyn Future<Output = Vec<(String, String)>> + Send>> {
+    ) -> AuthHeadersFuture {
         Box::pin(async { vec![] })
     }
 
@@ -113,7 +115,7 @@ mod tests {
             _: &ProviderMeta,
             _: Option<&AppHandle>,
             _: Option<&Value>,
-        ) -> Pin<Box<dyn Future<Output = Vec<(String, String)>> + Send>> {
+        ) -> AuthHeadersFuture {
             Box::pin(async { vec![("authorization".into(), "test-token".into())] })
         }
     }

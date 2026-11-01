@@ -175,6 +175,8 @@ fn parse_opencode_models(output: &str) -> Vec<OpenCodeModelRef> {
         .collect()
 }
 
+// Tauri command 参数与前端 invoke 载荷一一对应，无法收拢成结构体。
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(rename_all = "camelCase")]
 pub async fn fetch_models_for_config(
     app_handle: tauri::AppHandle,

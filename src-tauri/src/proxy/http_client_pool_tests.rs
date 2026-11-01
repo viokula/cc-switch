@@ -121,32 +121,65 @@ async fn tls_override_reuses_pool_without_leaking_auth_or_trust() {
 }
 
 #[tokio::test]
+async fn automatic_policy_refresh_replaces_tls_override_proxy_pool() {
+    let first = server(false).await;
+    let second = server(false).await;
+    let policies = [&first, &second].map(|server| {
+        Arc::new(ProxyPolicy {
+            configured_url: None,
+            matcher: Matcher::builder().all(server.url.as_str()).build(),
+            automatic_disabled: false,
+            windows_bypass: None,
+        })
+    });
+    let mut clients = TlsOverrideClients::default();
+    for _ in 0..2 {
+        send(
+            clients.get(false, &policies[0]).unwrap(),
+            "http://upstream.invalid/request",
+            None,
+        )
+        .await;
+    }
+    send(
+        clients.get(false, &policies[1]).unwrap(),
+        "http://upstream.invalid/request",
+        None,
+    )
+    .await;
+    assert_eq!(first.connections.load(Ordering::SeqCst), 1);
+    assert_eq!(second.connections.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn changing_proxy_replaces_pool_and_keeps_direct_routes_separate() {
     let first = server(false).await;
     let second = server(false).await;
     let direct = server(false).await;
     let mut clients = TlsOverrideClients::default();
+    let first_policy = Arc::new(ProxyPolicy::new(Some(&first.url)).unwrap());
+    let second_policy = Arc::new(ProxyPolicy::new(Some(&second.url)).unwrap());
     for _ in 0..2 {
-        let client = clients.get(false, Some(&first.url)).unwrap();
+        let client = clients.get(false, &first_policy).unwrap();
         assert_eq!(
             send(client, "http://upstream.invalid/request", None).await,
             "none"
         );
     }
     assert_eq!(first.connections.load(Ordering::SeqCst), 1);
-    let client = clients.get(false, Some(&second.url)).unwrap();
+    let client = clients.get(false, &second_policy).unwrap();
     send(client, "http://upstream.invalid/request", None).await;
     assert_eq!(second.connections.load(Ordering::SeqCst), 1);
-    for proxy in [&first.url, &second.url] {
-        send(clients.get(true, Some(proxy)).unwrap(), &direct.url, None).await;
+    for policy in [&first_policy, &second_policy] {
+        send(clients.get(true, policy).unwrap(), &direct.url, None).await;
     }
     assert_eq!(direct.connections.load(Ordering::SeqCst), 1);
     assert_eq!(first.connections.load(Ordering::SeqCst), 1);
     assert_eq!(second.connections.load(Ordering::SeqCst), 1);
     // An invalid update must not poison the last usable pool.
-    assert!(clients.get(false, Some("ftp://invalid.test")).is_err());
+    assert!(ProxyPolicy::new(Some("ftp://invalid.test")).is_err());
     send(
-        clients.get(false, Some(&second.url)).unwrap(),
+        clients.get(false, &second_policy).unwrap(),
         "http://upstream.invalid/request",
         None,
     )

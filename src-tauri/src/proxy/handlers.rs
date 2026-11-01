@@ -621,12 +621,7 @@ async fn handle_claude_transform(
     let use_streaming = if aggregate_codex_oauth_responses_sse || aggregate_extension_chat_sse {
         false
     } else {
-        should_use_claude_transform_streaming(
-            is_stream,
-            response.is_sse(),
-            api_format,
-            is_codex_oauth,
-        )
+        should_use_claude_transform_streaming(is_stream, response.is_sse(), api_format)
     };
     let tool_schema_hints = transform_gemini::extract_anthropic_tool_schema_hints(original_body);
     let tool_schema_hints = (!tool_schema_hints.is_empty()).then_some(tool_schema_hints);
@@ -2651,9 +2646,9 @@ fn should_use_claude_transform_streaming(
     requested_streaming: bool,
     upstream_is_sse: bool,
     api_format: &str,
-    is_codex_oauth: bool,
 ) -> bool {
-    requested_streaming || upstream_is_sse || (is_codex_oauth && api_format == "openai_responses")
+    requested_streaming
+        || (upstream_is_sse && !matches!(api_format, "openai_chat" | "openai_responses"))
 }
 
 async fn responses_sse_stream_to_anthropic_message(

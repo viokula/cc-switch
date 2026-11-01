@@ -2790,15 +2790,6 @@ impl RequestForwarder {
             self.non_streaming_timeout
         };
 
-        // 获取全局代理 URL
-        let upstream_proxy_url: Option<String> = super::http_client::proxy_url_for(&url);
-
-        // SOCKS5 代理不支持 CONNECT 隧道，需要用 reqwest
-        let is_socks_proxy = upstream_proxy_url
-            .as_deref()
-            .map(|u| u.starts_with("socks5"))
-            .unwrap_or(false);
-
         let preserve_exact_header_case = should_preserve_exact_header_case(
             adapter.name(),
             provider,
@@ -2819,6 +2810,14 @@ impl RequestForwarder {
             })
             .unwrap_or_default();
 
+        let route =
+            super::http_client::route_for_url(&url, skip_tls).map_err(ProxyError::ConfigError)?;
+        // SOCKS routes, including automatic proxies, use reqwest's SOCKS support.
+        let is_socks_proxy = route
+            .proxy
+            .as_ref()
+            .is_some_and(|proxy| matches!(proxy.uri().scheme_str(), Some("socks5" | "socks5h")));
+
         // TLS overrides must use the configurable client; the raw path verifies certificates.
         let response = if skip_tls
             || prefer_pooled_client
@@ -2828,9 +2827,7 @@ impl RequestForwarder {
             log::debug!(
                 "[Forwarder] Using pooled reqwest client (extension={prefer_pooled_client}, preserve_exact_header_case={preserve_exact_header_case}, socks_proxy={is_socks_proxy}, skip_tls={skip_tls})"
             );
-            let client = super::http_client::get_for_url_with_tls(&url, skip_tls)
-                .map_err(ProxyError::ConfigError)?;
-            let mut request = client.request(method.clone(), &url);
+            let mut request = route.client.request(method.clone(), &url);
             if request_is_streaming {
                 // reqwest 的 timeout 是整请求超时；流式请求交给 response_processor
                 // 的首包/静默期超时控制，避免长流被总时长误杀。
@@ -2875,7 +2872,7 @@ impl RequestForwarder {
                 extensions.clone(),
                 body_bytes,
                 timeout,
-                upstream_proxy_url.as_deref(),
+                route.proxy.as_ref(),
             )
             .await?
         };
