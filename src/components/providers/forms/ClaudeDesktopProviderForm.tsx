@@ -67,16 +67,14 @@ import type { ManagedAuthProvider } from "@/lib/api";
 import { useCopilotAuth, useCodexOauth, useXaiOauth } from "./hooks";
 import { isOAuthProviderType } from "@/config/constants";
 import {
-<<<<<<< HEAD
   ClaudeReasoningEffortField,
   toClaudeReasoningEffortChoice,
   type ClaudeReasoningEffortChoice,
 } from "./ClaudeReasoningEffortField";
-=======
+import {
   getFormExtension,
   getFormExtensionSaveMeta,
 } from "@/config/formExtensions";
->>>>>>> cb504dd3 (feat(huawei): CodeAgent 3.0 integration with quota fetch and 8888 proxy removal (#4))
 
 export type ClaudeDesktopProviderFormValues = ProviderFormData & {
   presetId?: string;
@@ -407,17 +405,14 @@ export function ClaudeDesktopProviderForm({
   );
   const activeProviderType =
     activePreset?.providerType ?? initialData?.meta?.providerType;
-<<<<<<< HEAD
   // Codex/xAI OAuth ignore editable URLs and use fixed backend endpoints.
   const usesAutomaticCopilotFormat =
     activeProviderType === "github_copilot" ||
     (activeProviderType !== "codex_oauth" &&
       activeProviderType !== "xai_oauth" &&
       baseUrl.includes("githubcopilot.com"));
-=======
   const extension = getFormExtension(activeProviderType ?? "");
   const ExtensionAuthSection = extension?.AuthSection;
->>>>>>> 4046a9d1 (feat(huawei): CodeAgent 3.0 integration with quota fetch and 8888 proxy removal)
   const { isAuthenticated: isCopilotAuthenticated, accounts: copilotAccounts } =
     useCopilotAuth();
   const {
