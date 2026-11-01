@@ -152,6 +152,7 @@ import {
   getFormExtension,
   getFormExtensionSaveMeta,
 } from "@/config/formExtensions";
+import { normalizeEnabledCodexChatEffortParam } from "./helpers/codexChatReasoning";
 
 type PresetEntry = {
   id: string;
@@ -253,7 +254,7 @@ const normalizeCodexChatReasoningForSave = (
       ? (value?.thinkingParam ?? "thinking")
       : "none",
     effortParam: supportsEffort
-      ? (value?.effortParam ?? "reasoning_effort")
+      ? normalizeEnabledCodexChatEffortParam(value?.effortParam)
       : "none",
     effortValueMode: supportsEffort
       ? (value?.effortValueMode ?? "passthrough")
