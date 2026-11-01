@@ -2,8 +2,11 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::{get_home_dir, write_text_file_private};
+use crate::config::get_home_dir;
+#[cfg(test)]
+use crate::config::write_text_file_private;
 use crate::error::AppError;
+#[cfg(test)]
 use crate::provider::Provider;
 
 pub const DEFAULT_MODEL: &str = "grok-4.5";
@@ -233,6 +236,7 @@ pub fn extract_base_url(config_toml: &str) -> Option<String> {
     Some(extract_model_config(config_toml)?.base_url)
 }
 
+#[cfg(test)]
 fn update_selected_model_string(
     config_toml: &str,
     field: &str,
@@ -277,6 +281,7 @@ fn update_selected_model_string(
     Ok(document.to_string())
 }
 
+#[cfg(test)]
 pub fn apply_proxy_takeover(
     config_toml: &str,
     proxy_base_url: &str,
@@ -285,10 +290,6 @@ pub fn apply_proxy_takeover(
     let updated = update_selected_model_string(config_toml, "base_url", proxy_base_url)?;
     let updated = update_selected_model_string(&updated, "api_key", token_placeholder)?;
     update_selected_model_string(&updated, "api_backend", DEFAULT_API_BACKEND)
-}
-
-pub fn update_api_key(config_toml: &str, api_key: &str) -> Result<String, AppError> {
-    update_selected_model_string(config_toml, "api_key", api_key)
 }
 
 pub fn has_proxy_placeholder(config_toml: &str, token_placeholder: &str) -> bool {
@@ -305,6 +306,7 @@ pub fn has_proxy_placeholder(config_toml: &str, token_placeholder: &str) -> bool
 /// `validate_config_toml`，这个供应商就切不回去。live 的 `models.default`
 /// 缺失或指不到表、而供应商行原来的默认模型表还在 live 里时，换回行里的值；
 /// 其余情况（含官方态）返回 None，保持原样。
+#[cfg(test)]
 pub fn restore_provider_default_model(live_config: &str, provider_config: &str) -> Option<String> {
     let provider_default = provider_config
         .parse::<toml::Value>()
@@ -400,6 +402,7 @@ pub fn read_grok_live_settings() -> Result<Value, AppError> {
     Ok(json!({ "config": config }))
 }
 
+#[cfg(test)]
 pub fn write_grok_provider_live(provider: &Provider) -> Result<(), AppError> {
     let settings = provider.settings_config.as_object().ok_or_else(|| {
         AppError::localized(
@@ -433,6 +436,7 @@ pub fn write_grok_provider_live(provider: &Provider) -> Result<(), AppError> {
 ///
 /// 代理接管的备份/恢复也走这里：官方态 live（无自定义模型表）必须可以
 /// 原样写回。完整形状校验由 `write_grok_provider_live` 的非官方分支负责。
+#[cfg(test)]
 pub fn write_grok_live_settings(settings: &Value) -> Result<(), AppError> {
     let config = settings
         .get("config")
@@ -446,16 +450,6 @@ pub fn write_grok_live_settings(settings: &Value) -> Result<(), AppError> {
         })?;
     validate_config_toml_syntax(config)?;
     write_text_file_private(&get_grok_config_path(), config)
-}
-
-/// 从 Grok Build 配置 TOML 里提取内联的 `api_key`（若有）。
-pub fn extract_inline_api_key(config_toml: &str) -> Option<String> {
-    extract_model_config(config_toml)?.api_key
-}
-
-/// 判断 Grok Build 配置里的 `base_url` 是否匹配给定谓词。
-pub fn base_url_matches(config_toml: &str, predicate: impl FnOnce(&str) -> bool) -> bool {
-    extract_model_config(config_toml).is_some_and(|config| predicate(&config.base_url))
 }
 
 #[cfg(test)]

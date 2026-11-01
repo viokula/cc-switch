@@ -99,7 +99,12 @@ async fn huawei_non_streaming_probe_rejects_truncated_upstream() {
 }
 
 #[tokio::test]
-async fn ordinary_chat_sse_keeps_existing_streaming_fallback() {
+async fn ordinary_chat_sse_aggregates_for_non_streaming_requests() {
     let response = transform_huawei_sse(SSE, false, "ordinary").await.unwrap();
-    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    assert_eq!(response.headers()["content-type"], "application/json");
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["content"][0]["text"], "OK.");
 }
