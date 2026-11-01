@@ -9,7 +9,10 @@ use bytes::Bytes;
 use futures::{stream::Stream, StreamExt};
 use http_body_util::BodyExt;
 use hyper_rustls::HttpsConnectorBuilder;
-use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+use hyper_util::{
+    client::{legacy::Client, proxy::matcher::Intercept},
+    rt::TokioExecutor,
+};
 use std::sync::OnceLock;
 
 /// Our own header case map: maps lowercase header name → original wire-casing bytes.
@@ -253,9 +256,9 @@ impl ProxyResponse {
 /// The caller is expected to include `Host` in the supplied `headers` at the
 /// correct position.
 ///
-/// `proxy_url`: optional upstream HTTP proxy URL (e.g. `http://127.0.0.1:7890`).
-/// When set, the raw write path uses HTTP CONNECT tunneling through the proxy,
-/// so header-case preservation works even when an upstream proxy is configured.
+/// `proxy`: the selected HTTP/HTTPS proxy and its authentication.
+/// When set, the raw write path always uses HTTP CONNECT tunneling, including
+/// requests without original header cases.
 ///
 /// `log_display` is a caller-supplied, already-sanitized string used only for
 /// logging; this layer never derives a log value from the raw `uri`.
@@ -268,31 +271,28 @@ pub async fn send_request(
     original_extensions: http::Extensions,
     body: Vec<u8>,
     timeout: std::time::Duration,
-    proxy_url: Option<&str>,
+    proxy: Option<&Intercept>,
 ) -> Result<ProxyResponse, ProxyError> {
     // Extract our own OriginalHeaderCases if available
-    let original_cases = original_extensions.get::<OriginalHeaderCases>().cloned();
-    let has_cases = original_cases
-        .as_ref()
-        .map(|c| !c.cases.is_empty())
-        .unwrap_or(false);
+    let original_cases = original_extensions
+        .get::<OriginalHeaderCases>()
+        .cloned()
+        .unwrap_or_default();
+    let has_cases = !original_cases.cases.is_empty();
     log::debug!(
         "[HyperClient] Sending request: target={}, header_count={}, \
          has_host={}, has_original_cases={has_cases}, proxy={:?}",
         log_display,
         headers.len(),
         headers.contains_key(http::header::HOST),
-        proxy_url.map(super::http_client::mask_url),
+        proxy.map(|proxy| super::http_client::mask_url(&proxy.uri().to_string())),
     );
 
-    if let Some(original_cases) = original_cases
-        .as_ref()
-        .filter(|cases| !cases.cases.is_empty())
-    {
-        // Primary path: use raw write + hyper handshake for exact header casing
+    if has_cases || proxy.is_some() {
+        // A selected proxy must survive missing original header cases.
         let result = tokio::time::timeout(
             timeout,
-            send_raw_request(&uri, &method, &headers, original_cases, &body, proxy_url),
+            send_raw_request(&uri, &method, &headers, &original_cases, &body, proxy),
         )
         .await
         .map_err(|_| ProxyError::Timeout(format!("请求超时: {}s", timeout.as_secs())))?;
@@ -300,7 +300,7 @@ pub async fn send_request(
         match result {
             Ok(resp) => return Ok(resp),
             Err(e) => {
-                if proxy_url.is_some() {
+                if proxy.is_some() {
                     // Don't bypass configured proxy with direct connect fallback
                     return Err(e);
                 }
@@ -392,7 +392,7 @@ impl tokio::io::AsyncWrite for ProxyStream {
 
 /// Send request via raw TCP/TLS with exact original header casing.
 ///
-/// When `proxy_url` is provided, establishes an HTTP CONNECT tunnel through
+/// When `proxy` is provided, establishes an HTTP CONNECT tunnel through
 /// the proxy first, then performs TLS + raw write through the tunnel.
 /// This preserves header casing even when an upstream proxy is configured.
 async fn send_raw_request(
@@ -401,7 +401,7 @@ async fn send_raw_request(
     headers: &http::HeaderMap,
     original_cases: &OriginalHeaderCases,
     body: &[u8],
-    proxy_url: Option<&str>,
+    proxy: Option<&Intercept>,
 ) -> Result<ProxyResponse, ProxyError> {
     use tokio::io::AsyncWriteExt;
 
@@ -418,7 +418,7 @@ async fn send_raw_request(
     let raw = build_raw_request(method, path_and_query, headers, original_cases, body);
 
     // Establish TCP connection — either direct or through HTTP CONNECT proxy
-    let stream = if let Some(proxy) = proxy_url {
+    let stream = if let Some(proxy) = proxy {
         connect_via_proxy(proxy, host, port).await?
     } else {
         ProxyStream::Tcp(
@@ -471,32 +471,23 @@ async fn send_raw_request(
 /// 3. Read the proxy's 200 response (407 → `AuthError`)
 /// 4. Return the tunneled stream (ready for target TLS handshake + raw write)
 async fn connect_via_proxy(
-    proxy_url: &str,
+    proxy: &Intercept,
     target_host: &str,
     target_port: u16,
 ) -> Result<ProxyStream, ProxyError> {
-    use base64::Engine;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    let parsed = url::Url::parse(proxy_url)
-        .map_err(|e| ProxyError::ForwardFailed(format!("Invalid proxy URL: {e}")))?;
-
-    let proxy_host = parsed
-        .host_str()
+    let proxy_uri = proxy.uri();
+    let proxy_host = proxy_uri
+        .host()
         .ok_or_else(|| ProxyError::ForwardFailed("Proxy URL has no host".into()))?;
-    let proxy_port = parsed
-        .port()
-        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-
-    // Build Proxy-Authorization header if credentials are present
-    let proxy_auth = if !parsed.username().is_empty() {
-        let password = parsed.password().unwrap_or("");
-        let credentials = format!("{}:{}", parsed.username(), password);
-        let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
-        Some(format!("Proxy-Authorization: Basic {encoded}\r\n"))
-    } else {
-        None
-    };
+    let proxy_port = proxy_uri
+        .port_u16()
+        .unwrap_or(if proxy_uri.scheme_str() == Some("https") {
+            443
+        } else {
+            80
+        });
 
     // Connect to the proxy
     let tcp = tokio::net::TcpStream::connect((proxy_host, proxy_port))
@@ -504,7 +495,7 @@ async fn connect_via_proxy(
         .map_err(|e| ProxyError::ForwardFailed(format!("Proxy TCP connect failed: {e}")))?;
 
     // Wrap with TLS if the proxy URL uses https://
-    let mut stream: ProxyStream = if parsed.scheme() == "https" {
+    let mut stream: ProxyStream = if proxy_uri.scheme_str() == Some("https") {
         let tls_connector = global_tls_connector();
         let server_name = rustls::pki_types::ServerName::try_from(proxy_host.to_string())
             .map_err(|e| ProxyError::ForwardFailed(format!("Invalid proxy server name: {e}")))?;
@@ -521,14 +512,17 @@ async fn connect_via_proxy(
     let mut connect_req = format!(
         "CONNECT {target_host}:{target_port} HTTP/1.1\r\n\
          Host: {target_host}:{target_port}\r\n"
-    );
-    if let Some(auth) = &proxy_auth {
-        connect_req.push_str(auth);
+    )
+    .into_bytes();
+    if let Some(auth) = proxy.basic_auth() {
+        connect_req.extend_from_slice(b"Proxy-Authorization: ");
+        connect_req.extend_from_slice(auth.as_bytes());
+        connect_req.extend_from_slice(b"\r\n");
     }
-    connect_req.push_str("\r\n");
+    connect_req.extend_from_slice(b"\r\n");
 
     stream
-        .write_all(connect_req.as_bytes())
+        .write_all(&connect_req)
         .await
         .map_err(|e| ProxyError::ForwardFailed(format!("CONNECT write failed: {e}")))?;
     stream

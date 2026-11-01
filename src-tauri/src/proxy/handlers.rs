@@ -4249,6 +4249,7 @@ data: [DONE]\n\n";
             false,
             true,
             "openai_responses",
+            false,
         ));
     }
 
@@ -4316,6 +4317,7 @@ data: [DONE]\n\n";
             false,
             true,
             "openai_chat",
+            false,
         ));
     }
 
@@ -4325,6 +4327,7 @@ data: [DONE]\n\n";
             false,
             false,
             "openai_responses",
+            false,
         ));
     }
 
@@ -4335,7 +4338,8 @@ data: [DONE]\n\n";
                 assert!(should_use_claude_transform_streaming(
                     true,
                     upstream_is_sse,
-                    api_format
+                    api_format,
+                    false,
                 ));
             }
         }
@@ -4343,7 +4347,8 @@ data: [DONE]\n\n";
         assert!(should_use_claude_transform_streaming(
             false,
             true,
-            "gemini_native"
+            "gemini_native",
+            false,
         ));
     }
 

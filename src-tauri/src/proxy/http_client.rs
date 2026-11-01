@@ -3,15 +3,122 @@
 //! 提供支持全局代理配置的 HTTP 客户端。
 //! 所有需要发送 HTTP 请求的模块都应使用此模块提供的客户端。
 
+use base64::{engine::general_purpose::STANDARD, Engine};
+use hyper_util::client::proxy::matcher::{Intercept, Matcher};
 use once_cell::sync::OnceCell;
 use reqwest::Client;
 use std::env;
 use std::net::IpAddr;
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::Duration;
 
-/// 全局 HTTP 客户端实例
-static GLOBAL_CLIENT: OnceCell<RwLock<Client>> = OnceCell::new();
+#[derive(Clone)]
+struct ClientState {
+    client: Client,
+    policy: Arc<ProxyPolicy>,
+}
+
+static GLOBAL_CLIENT: OnceCell<RwLock<ClientState>> = OnceCell::new();
+
+struct ProxyPolicy {
+    configured_url: Option<String>,
+    matcher: Matcher,
+    automatic_disabled: bool,
+    windows_bypass: Option<String>,
+}
+
+impl ProxyPolicy {
+    fn new(proxy_url: Option<&str>) -> Result<Self, String> {
+        if let Some(value) = proxy_url {
+            let parsed = url::Url::parse(value)
+                .map_err(|e| format!("Invalid proxy URL '{}': {e}", mask_url(value)))?;
+            if !["http", "https", "socks5", "socks5h"].contains(&parsed.scheme()) {
+                return Err(format!(
+                    "Invalid proxy scheme '{}' in URL '{}'. Supported: http, https, socks5, socks5h",
+                    parsed.scheme(),
+                    mask_url(value)
+                ));
+            }
+            reqwest::Proxy::all(parsed.as_str())
+                .map_err(|e| format!("Invalid proxy URL '{}': {e}", mask_url(value)))?;
+            return Ok(Self {
+                configured_url: Some(value.to_owned()),
+                matcher: Matcher::builder().all(parsed.as_str()).build(),
+                automatic_disabled: false,
+                windows_bypass: None,
+            });
+        }
+        Ok(Self {
+            configured_url: None,
+            matcher: Matcher::from_system(),
+            automatic_disabled: system_proxy_points_to_loopback(),
+            windows_bypass: system_proxy_bypass_rules(),
+        })
+    }
+
+    fn proxy_for(&self, url: &str) -> Option<Intercept> {
+        if is_loopback_url(url) {
+            return None;
+        }
+        if self.configured_url.is_none()
+            && (self.automatic_disabled
+                || self
+                    .windows_bypass
+                    .as_deref()
+                    .is_some_and(|rules| matches_windows_proxy_bypass(url, rules)))
+        {
+            return None;
+        }
+        self.matcher.intercept(&url.parse().ok()?)
+    }
+
+    fn build_client(self: &Arc<Self>, builder: reqwest::ClientBuilder) -> Result<Client, String> {
+        let policy = self.clone();
+        builder
+            .no_proxy()
+            .proxy(reqwest::Proxy::custom(move |url| {
+                policy
+                    .proxy_for(url.as_str())
+                    .as_ref()
+                    .map(proxy_url_with_auth)
+            }))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client: {e}"))
+    }
+}
+
+// Matcher separates credentials from its URI; custom reqwest proxies take a URL.
+fn proxy_url_with_auth(proxy: &Intercept) -> url::Url {
+    let mut url = url::Url::parse(&proxy.uri().to_string()).expect("matcher returns a proxy URI");
+    let basic = proxy.basic_auth().map(|auth| {
+        let bytes = STANDARD
+            .decode(&auth.as_bytes()[6..])
+            .expect("matcher produces Basic authentication");
+        String::from_utf8(bytes).expect("matcher decodes credentials as UTF-8")
+    });
+    let auth = proxy
+        .raw_auth()
+        .or_else(|| basic.as_deref().and_then(|value| value.split_once(':')));
+    if let Some((user, password)) = auth {
+        // URL setters preserve percent escapes; credentials here are already decoded.
+        url.set_username(&user.replace('%', "%25"))
+            .expect("proxy URI has an authority");
+        url.set_password(Some(&password.replace('%', "%25")))
+            .expect("proxy URI has an authority");
+    }
+    url
+}
+
+fn build_state(proxy_url: Option<&str>) -> Result<ClientState, String> {
+    let policy = Arc::new(ProxyPolicy::new(proxy_url)?);
+    let client = policy.build_client(base_builder())?;
+    Ok(ClientState { client, policy })
+}
+
+pub struct RequestRoute {
+    pub client: Client,
+    pub proxy: Option<Intercept>,
+}
 
 /// 不走任何代理的客户端：上游是本机地址（Ollama、LM Studio 等）时使用
 static DIRECT_CLIENT: OnceCell<Client> = OnceCell::new();
@@ -25,11 +132,11 @@ static OVERRIDE_CLIENTS: LazyLock<Mutex<TlsOverrideClients>> =
 #[derive(Default)]
 struct TlsOverrideClients {
     direct: Option<Client>,
-    configured: Option<(Option<String>, Client)>,
+    configured: Option<(Arc<ProxyPolicy>, Client)>,
 }
 
 impl TlsOverrideClients {
-    fn get(&mut self, direct: bool, proxy_url: Option<&str>) -> Result<Client, String> {
+    fn get(&mut self, direct: bool, policy: &Arc<ProxyPolicy>) -> Result<Client, String> {
         if direct {
             if self.direct.is_none() {
                 self.direct = Some(
@@ -42,13 +149,13 @@ impl TlsOverrideClients {
             }
             return Ok(self.direct.as_ref().unwrap().clone());
         }
-        if let Some((cached_url, client)) = &self.configured {
-            if cached_url.as_deref() == proxy_url {
+        if let Some((cached_policy, client)) = &self.configured {
+            if Arc::ptr_eq(cached_policy, policy) {
                 return Ok(client.clone());
             }
         }
-        let client = build_client_with_tls(proxy_url, true)?;
-        self.configured = Some((proxy_url.map(str::to_owned), client.clone()));
+        let client = policy.build_client(base_builder().danger_accept_invalid_certs(true))?;
+        self.configured = Some((policy.clone(), client.clone()));
         Ok(client)
     }
 }
@@ -58,9 +165,6 @@ fn invalidate_override_clients() {
         clients.configured = None;
     }
 }
-
-/// 当前代理 URL（用于日志和状态查询）
-static CURRENT_PROXY_URL: OnceCell<RwLock<Option<String>>> = OnceCell::new();
 
 /// CC Switch 代理服务器当前监听的端口
 static CC_SWITCH_PROXY_PORT: OnceCell<RwLock<u16>> = OnceCell::new();
@@ -96,25 +200,22 @@ fn get_proxy_port() -> u16 {
 ///
 /// # Arguments
 /// * `proxy_url` - 代理 URL，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`
-///   传入 None 或空字符串表示直连
+///   传入 None 或空字符串表示跟随环境／系统代理
 pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let client = build_client(effective_url)?;
+    let state = build_state(effective_url)?;
 
     // 尝试初始化全局客户端，如果已存在则记录警告并使用 apply_proxy 更新
-    if GLOBAL_CLIENT.set(RwLock::new(client.clone())).is_err() {
+    if GLOBAL_CLIENT.set(RwLock::new(state)).is_err() {
         log::warn!(
             "[GlobalProxy] [GP-003] Already initialized, updating instead: {}",
             effective_url
                 .map(mask_url)
-                .unwrap_or_else(|| "direct connection".to_string())
+                .unwrap_or_else(|| "automatic proxy policy".to_string())
         );
         // 已初始化，改用 apply_proxy 更新
         return apply_proxy(proxy_url);
     }
-
-    // 初始化代理 URL 记录
-    let _ = CURRENT_PROXY_URL.set(RwLock::new(effective_url.map(|s| s.to_string())));
 
     invalidate_override_clients();
 
@@ -122,7 +223,7 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
         "[GlobalProxy] Initialized: {}",
         effective_url
             .map(mask_url)
-            .unwrap_or_else(|| "direct connection".to_string())
+            .unwrap_or_else(|| "automatic proxy policy".to_string())
     );
 
     Ok(())
@@ -134,7 +235,7 @@ pub fn init(proxy_url: Option<&str>) -> Result<(), String> {
 /// 用于在持久化之前验证配置的有效性。
 ///
 /// # Arguments
-/// * `proxy_url` - 代理 URL，None 或空字符串表示直连
+/// * `proxy_url` - 代理 URL，None 或空字符串表示跟随环境／系统代理
 ///
 /// # Returns
 /// 验证成功返回 Ok(())，失败返回错误信息
@@ -151,10 +252,10 @@ pub fn validate_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// 应在 validate_proxy 成功后调用。
 ///
 /// # Arguments
-/// * `proxy_url` - 代理 URL，None 或空字符串表示直连
+/// * `proxy_url` - 代理 URL，None 或空字符串表示跟随环境／系统代理
 pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     let effective_url = proxy_url.filter(|s| !s.trim().is_empty());
-    let new_client = build_client(effective_url)?;
+    let new_state = build_state(effective_url)?;
 
     // 更新客户端
     if let Some(lock) = GLOBAL_CLIENT.get() {
@@ -162,19 +263,10 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
             log::error!("[GlobalProxy] [GP-001] Failed to acquire write lock: {e}");
             "Failed to update proxy: lock poisoned".to_string()
         })?;
-        *client = new_client;
+        *client = new_state;
     } else {
         // 如果还没初始化，则初始化
         return init(proxy_url);
-    }
-
-    // 更新代理 URL 记录
-    if let Some(lock) = CURRENT_PROXY_URL.get() {
-        let mut url = lock.write().map_err(|e| {
-            log::error!("[GlobalProxy] [GP-002] Failed to acquire URL write lock: {e}");
-            "Failed to update proxy URL record: lock poisoned".to_string()
-        })?;
-        *url = effective_url.map(|s| s.to_string());
     }
 
     invalidate_override_clients();
@@ -183,7 +275,7 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
         "[GlobalProxy] Applied: {}",
         effective_url
             .map(mask_url)
-            .unwrap_or_else(|| "direct connection".to_string())
+            .unwrap_or_else(|| "automatic proxy policy".to_string())
     );
 
     Ok(())
@@ -196,7 +288,7 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
 /// 请使用 validate_proxy + apply_proxy 组合。
 ///
 /// # Arguments
-/// * `proxy_url` - 新的代理 URL，None 或空字符串表示直连
+/// * `proxy_url` - 新的代理 URL，None 或空字符串表示跟随环境／系统代理
 #[allow(dead_code)]
 pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     apply_proxy(proxy_url)
@@ -209,55 +301,38 @@ pub fn get() -> Client {
     GLOBAL_CLIENT
         .get()
         .and_then(|lock| lock.read().ok())
-        .map(|c| c.clone())
+        .map(|state| state.client.clone())
         .unwrap_or_else(|| {
             log::warn!("[GlobalProxy] [GP-004] Client not initialized, using fallback");
             build_client(None).unwrap_or_default()
         })
 }
 
-/// 按目标地址取客户端：本机地址和系统代理例外直连，其余同 [`get`]
-///
-/// reqwest 不会自动绕开本机地址：配了全局代理时 `Proxy::all` 对所有目标生效，
-/// 跟随系统代理时也只认 `NO_PROXY` 环境变量（macOS 不读「不使用代理的主机」）。
-/// 本机推理服务因此会被送进代理，代理不能代连本机时请求就失败。
+/// 按目标地址取客户端，使用与 Raw/Hyper 相同的代理策略。
 pub fn get_for_url(url: &str) -> Client {
-    if bypass_proxy_for_url(url) {
-        direct_client()
-    } else {
+    get_for_url_with_tls(url, false).unwrap_or_else(|e| {
+        log::warn!("[GlobalProxy] Failed to select HTTP client: {e}");
         get()
-    }
-}
-
-// Environment proxies take precedence over WinINet in reqwest, including its bypass
-// list. Preserve Windows' explicit direct routes when no app proxy was configured.
-fn bypass_proxy_for_url(url: &str) -> bool {
-    is_loopback_url(url) || (get_current_proxy_url().is_none() && system_proxy_bypasses_url(url))
+    })
 }
 
 #[cfg(windows)]
-fn system_proxy_bypasses_url(url: &str) -> bool {
+fn system_proxy_bypass_rules() -> Option<String> {
     use winreg::{enums::HKEY_CURRENT_USER, RegKey};
-    let Ok(settings) = RegKey::predef(HKEY_CURRENT_USER)
+    let settings = RegKey::predef(HKEY_CURRENT_USER)
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
-    else {
-        return false;
-    };
+        .ok()?;
     if settings.get_value::<u32, _>("ProxyEnable").unwrap_or(0) == 0 {
-        return false;
+        return None;
     }
-    settings
-        .get_value::<String, _>("ProxyOverride")
-        .map(|rules| matches_windows_proxy_bypass(url, &rules))
-        .unwrap_or(false)
+    settings.get_value::<String, _>("ProxyOverride").ok()
 }
 
 #[cfg(not(windows))]
-fn system_proxy_bypasses_url(_url: &str) -> bool {
-    false
+fn system_proxy_bypass_rules() -> Option<String> {
+    None
 }
 
-#[cfg(any(windows, test))]
 fn matches_windows_proxy_bypass(url: &str, rules: &str) -> bool {
     let Ok(url) = url::Url::parse(url) else {
         return false;
@@ -299,17 +374,40 @@ fn matches_windows_proxy_bypass(url: &str, rules: &str) -> bool {
     })
 }
 
-/// 发往 `url` 时应使用的上游代理：本机地址返回 None（直连），其余返回当前全局代理
-pub fn proxy_url_for(url: &str) -> Option<String> {
-    upstream_proxy_for(url, get_current_proxy_url())
+fn current_state() -> Result<ClientState, String> {
+    if let Some(state) = GLOBAL_CLIENT.get() {
+        return state
+            .read()
+            .map(|state| state.clone())
+            .map_err(|_| "Failed to read HTTP client state".to_string());
+    }
+    build_state(None)
 }
 
-fn upstream_proxy_for(url: &str, current: Option<String>) -> Option<String> {
-    if is_loopback_url(url) {
-        None
+pub fn route_for_url(url: &str, skip_verify: bool) -> Result<RequestRoute, String> {
+    let state = current_state()?;
+    let proxy = state.policy.proxy_for(url);
+    // Non-local direct routes keep the policy client for per-URL redirect routing.
+    let local = is_loopback_url(url);
+    let client = if skip_verify {
+        OVERRIDE_CLIENTS
+            .lock()
+            .map_err(|_| "Failed to acquire TLS override client lock".to_string())?
+            .get(local, &state.policy)?
+    } else if local {
+        direct_client()
     } else {
-        current
-    }
+        state.client
+    };
+    let mode = if proxy.is_none() {
+        "direct/bypass"
+    } else if state.policy.configured_url.is_some() {
+        "explicit proxy"
+    } else {
+        "automatic proxy"
+    };
+    log::debug!("[GlobalProxy] Route for {}: {mode}", mask_url(url));
+    Ok(RequestRoute { client, proxy })
 }
 
 fn direct_client() -> Client {
@@ -352,12 +450,12 @@ fn host_is_loopback(host: &str) -> bool {
 
 /// 获取当前代理 URL
 ///
-/// 返回当前配置的代理 URL，None 表示直连。
+/// 返回当前配置的代理 URL，None 表示跟随环境／系统代理。
 pub fn get_current_proxy_url() -> Option<String> {
-    CURRENT_PROXY_URL
+    GLOBAL_CLIENT
         .get()
         .and_then(|lock| lock.read().ok())
-        .and_then(|url| url.clone())
+        .and_then(|state| state.policy.configured_url.clone())
 }
 
 /// 检查是否正在使用代理
@@ -384,76 +482,19 @@ fn base_builder() -> reqwest::ClientBuilder {
 /// 不跟随重定向的客户端，代理设置与全局客户端一致。带自定义凭据请求头（如 `x-dsh-auth-token`）
 /// 的请求用它：reqwest 跨主机重定向时只剥掉标准认证头，自定义头会被带到新主机。
 pub fn no_redirect() -> Result<Client, String> {
-    build_client_from(
-        base_builder().redirect(reqwest::redirect::Policy::none()),
-        get_current_proxy_url().as_deref(),
-    )
+    current_state()?
+        .policy
+        .build_client(base_builder().redirect(reqwest::redirect::Policy::none()))
 }
 
 /// 构建 HTTP 客户端
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
-    build_client_with_tls(proxy_url, false)
+    Arc::new(ProxyPolicy::new(proxy_url)?).build_client(base_builder())
 }
 
-/// Apply a provider's explicit TLS policy without altering the verified pools.
+/// Apply a provider's TLS policy without sharing its pool with verified clients.
 pub fn get_for_url_with_tls(url: &str, skip_verify: bool) -> Result<Client, String> {
-    if !skip_verify {
-        return Ok(get_for_url(url));
-    }
-    let mut clients = OVERRIDE_CLIENTS
-        .lock()
-        .map_err(|_| "Failed to acquire TLS override client lock".to_string())?;
-    // Snapshot routing while holding the cache lock. A concurrent proxy update
-    // invalidates this cache after publishing its URL, so later requests refresh.
-    let proxy_url = get_current_proxy_url();
-    let direct = is_loopback_url(url) || (proxy_url.is_none() && system_proxy_bypasses_url(url));
-    clients.get(direct, proxy_url.as_deref())
-}
-
-fn build_client_with_tls(proxy_url: Option<&str>, skip_tls: bool) -> Result<Client, String> {
-    let builder = base_builder().danger_accept_invalid_certs(skip_tls);
-    build_client_from(builder, proxy_url)
-}
-
-fn build_client_from(
-    mut builder: reqwest::ClientBuilder,
-    proxy_url: Option<&str>,
-) -> Result<Client, String> {
-    // 有代理地址则使用代理，否则跟随系统代理
-    if let Some(url) = proxy_url {
-        // 先验证 URL 格式和 scheme
-        let parsed = url::Url::parse(url)
-            .map_err(|e| format!("Invalid proxy URL '{}': {}", mask_url(url), e))?;
-
-        let scheme = parsed.scheme();
-        if !["http", "https", "socks5", "socks5h"].contains(&scheme) {
-            return Err(format!(
-                "Invalid proxy scheme '{}' in URL '{}'. Supported: http, https, socks5, socks5h",
-                scheme,
-                mask_url(url)
-            ));
-        }
-
-        let proxy = reqwest::Proxy::all(url)
-            .map_err(|e| format!("Invalid proxy URL '{}': {}", mask_url(url), e))?;
-        builder = builder.proxy(proxy);
-        log::debug!("[GlobalProxy] Proxy configured: {}", mask_url(url));
-    } else {
-        // 未设置全局代理时，让 reqwest 自动检测系统代理（环境变量）
-        // 若系统代理指向本机，禁用系统代理避免自环
-        if system_proxy_points_to_loopback() {
-            builder = builder.no_proxy();
-            log::warn!(
-                "[GlobalProxy] System proxy points to localhost, bypassing to avoid recursion"
-            );
-        } else {
-            log::debug!("[GlobalProxy] Following system proxy (no explicit proxy configured)");
-        }
-    }
-
-    builder
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {e}"))
+    route_for_url(url, skip_verify).map(|route| route.client)
 }
 
 fn system_proxy_points_to_loopback() -> bool {
@@ -636,23 +677,20 @@ mod tests {
     }
 
     #[test]
-    fn test_upstream_proxy_for_skips_loopback() {
-        let current = Some("http://127.0.0.1:7890".to_string());
+    fn test_explicit_proxy_skips_loopback() {
+        let policy = ProxyPolicy::new(Some("http://127.0.0.1:7890")).unwrap();
+        for url in [
+            "http://localhost:11434/v1/messages",
+            "http://127.0.0.1:1234/v1/chat/completions",
+        ] {
+            assert!(policy.proxy_for(url).is_none());
+        }
         assert_eq!(
-            upstream_proxy_for("http://localhost:11434/v1/messages", current.clone()),
-            None
-        );
-        assert_eq!(
-            upstream_proxy_for("http://127.0.0.1:1234/v1/chat/completions", current.clone()),
-            None
-        );
-        assert_eq!(
-            upstream_proxy_for("https://api.example.com/v1/messages", current.clone()),
-            current
-        );
-        assert_eq!(
-            upstream_proxy_for("https://api.example.com/v1/messages", None),
-            None
+            policy
+                .proxy_for("https://api.example.com/v1/messages")
+                .unwrap()
+                .uri(),
+            &"http://127.0.0.1:7890/".parse::<http::Uri>().unwrap()
         );
     }
 
@@ -677,14 +715,16 @@ mod tests {
     #[tokio::test]
     async fn test_loopback_target_bypasses_unreachable_proxy() {
         let url = spawn_ok_server();
-        // 代理指向一个连不上的端口：经代理的客户端连本机服务也会失败（缺口本身）
+        // Loopback bypass also applies to clients built with an explicit proxy.
         let proxied = build_client(Some("http://127.0.0.1:1")).unwrap();
         assert!(proxied
             .get(&url)
             .timeout(Duration::from_secs(5))
             .send()
             .await
-            .is_err());
+            .unwrap()
+            .status()
+            .is_success());
         // 本机地址选到的直连客户端不受代理影响
         assert!(is_loopback_url(&url));
         let resp = direct_client()
@@ -780,6 +820,10 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "http_client_routing_tests.rs"]
+mod routing_tests;
 
 #[cfg(test)]
 #[path = "http_client_pool_tests.rs"]
