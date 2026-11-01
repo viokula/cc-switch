@@ -69,7 +69,14 @@ impl ProxyPolicy {
         {
             return None;
         }
-        self.matcher.intercept(&url.parse().ok()?)
+        let intercept = self.matcher.intercept(&url.parse().ok()?)?;
+        // The policy snapshot predates the listener's actual port (set_proxy_port
+        // runs after init and never rebuilds it), so check the selected proxy
+        // against the live port instead of a build-time flag.
+        if proxy_points_to_loopback(&intercept.uri().to_string()) {
+            return None;
+        }
+        Some(intercept)
     }
 
     fn build_client(self: &Arc<Self>, builder: reqwest::ClientBuilder) -> Result<Client, String> {

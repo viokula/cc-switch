@@ -211,6 +211,30 @@ fn automatic_localhost_proxy_remains_selectable_without_recursion_snapshot() {
 }
 
 #[test]
+#[serial_test::serial]
+fn selected_proxy_pointing_at_the_live_listener_port_goes_direct() {
+    // init() builds the policy before ProxyServer::start() publishes the real
+    // port, and set_proxy_port must not need to rebuild it: the guard reads the
+    // live port on every route decision.
+    set_proxy_port(15722);
+    let self_listener = "http://127.0.0.1:15722";
+    for configured in [None, Some(self_listener)] {
+        let policy = policy(configured, Matcher::builder().all(self_listener).build());
+        assert!(
+            policy.proxy_for(TARGET).is_none(),
+            "configured={configured:?}"
+        );
+    }
+    let other_local = "http://127.0.0.1:17890";
+    assert_proxy(
+        &policy(None, Matcher::builder().all(other_local).build()),
+        TARGET,
+        other_local,
+    );
+    set_proxy_port(15721);
+}
+
+#[test]
 fn http_basic_auth_with_escaped_characters_round_trips_through_proxy_url() {
     let expected = format!(
         "Basic {}",
