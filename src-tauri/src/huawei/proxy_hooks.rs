@@ -43,6 +43,31 @@ impl ProxyHook for HuaweiCodeAgentProxyHook {
         {
             body["stream"] = Value::Bool(true);
         }
+        // These verified SnapEngine routes reject max_tokens > 65536 with
+        // InferHub.001001005.400. Leave unverified model IDs unchanged.
+        if meta.provider_type.as_deref() == Some("huawei_codeagent_3")
+            && matches!(
+                body.get("model").and_then(Value::as_str),
+                Some(
+                    "deepseek-v4-flash-0731"
+                        | "deepseek-v4.1-flash-1017"
+                        | "maas-DeepSeek-V4-Flash-volcengine-codeagent"
+                        | "maas-deepseek-v4.1-flash-baidu-codeagent"
+                        | "maas-deepseek-v4.1-flash-volcengine-codeagent"
+                        | "maas-glm-5.1-zhipu"
+                        | "maas-glm-5.2-tencent-codeagent"
+                        | "maas-glm-5.2-volcengine-codeagent"
+                        | "maas-qwen3.7-flash"
+                        | "maas-qwen3.7-plus"
+                )
+            )
+            && body
+                .get("max_tokens")
+                .and_then(Value::as_u64)
+                .is_some_and(|tokens| tokens > 65_536)
+        {
+            body["max_tokens"] = Value::from(65_536);
+        }
     }
 
     fn on_auth_headers(
@@ -220,6 +245,129 @@ mod tests {
                 hook.on_request_body(&mut body, &meta);
                 assert_eq!(body, original);
             }
+        }
+    }
+
+    const VERIFIED_MODELS: [&str; 10] = [
+        "deepseek-v4-flash-0731",
+        "deepseek-v4.1-flash-1017",
+        "maas-DeepSeek-V4-Flash-volcengine-codeagent",
+        "maas-deepseek-v4.1-flash-baidu-codeagent",
+        "maas-deepseek-v4.1-flash-volcengine-codeagent",
+        "maas-glm-5.1-zhipu",
+        "maas-glm-5.2-tencent-codeagent",
+        "maas-glm-5.2-volcengine-codeagent",
+        "maas-qwen3.7-flash",
+        "maas-qwen3.7-plus",
+    ];
+
+    #[test]
+    fn codeagent_3_caps_verified_models_output_tokens() {
+        let hook = HuaweiCodeAgentProxyHook::new();
+        let meta = meta_with_app_target("huawei_codeagent_3", "claude");
+        for model in VERIFIED_MODELS {
+            let mut body = json!({
+                "model": model, "max_tokens": 128000, "stream": true,
+                "messages": [{"role": "user", "content": "synthetic test"}],
+                "reasoning_effort": "high", "tools": []
+            });
+            let mut expected = body.clone();
+            expected["max_tokens"] = json!(65536);
+            hook.on_request_body(&mut body, &meta);
+            assert_eq!(body, expected, "model={model}");
+        }
+    }
+
+    #[test]
+    fn codeagent_3_preserves_output_token_boundaries_and_types() {
+        let hook = HuaweiCodeAgentProxyHook::new();
+        let meta = meta_with_app_target("huawei_codeagent_3", "claude");
+        let original = json!({"model": VERIFIED_MODELS[0], "stream": true, "messages": []});
+        for (tokens, expected) in [
+            (1, 1),
+            (8192, 8192),
+            (65_535, 65_535),
+            (65_536, 65_536),
+            (65_537, 65_536),
+            (128_000, 65_536),
+            (u64::MAX, 65_536),
+        ] {
+            let mut body = original.clone();
+            body["max_tokens"] = json!(tokens);
+            hook.on_request_body(&mut body, &meta);
+            assert_eq!(body["max_tokens"], expected, "max_tokens={tokens}");
+        }
+        for tokens in [
+            None,
+            Some(json!(null)),
+            Some(json!("128000")),
+            Some(json!(-1)),
+            Some(json!(0)),
+            Some(json!(128000.5)),
+            Some(json!(true)),
+        ] {
+            let mut body = original.clone();
+            if let Some(tokens) = tokens {
+                body["max_tokens"] = tokens;
+            }
+            let expected = body.clone();
+            hook.on_request_body(&mut body, &meta);
+            assert_eq!(body, expected);
+        }
+    }
+
+    #[test]
+    fn output_token_cap_leaves_other_providers_and_models_unchanged() {
+        let hook = HuaweiCodeAgentProxyHook::new();
+        let original = json!({"model": VERIFIED_MODELS[0], "max_tokens": 128000, "stream": true});
+        for kind in [
+            None,
+            Some("huawei_codeagent_2"),
+            Some("huawei_w3"),
+            Some("huawei_idea"),
+            Some("anthropic"),
+        ] {
+            let mut meta = ProviderMeta::default();
+            meta.provider_type = kind.map(str::to_owned);
+            let mut body = original.clone();
+            hook.on_request_body(&mut body, &meta);
+            assert_eq!(body, original, "provider={kind:?}");
+        }
+        let meta = meta_with_app_target("huawei_codeagent_3", "claude");
+        for model in [
+            None,
+            Some("unknown-model"),
+            Some("maas-deepseek-v4.2-flash-volcengine-codeagent"),
+            Some("maas-deepseek-v4-flash-volcengine-codeagent"),
+            Some("maas-glm-5.2-tencent-codeagent-custom"),
+            Some("maas-qwen3.7-plus-custom"),
+        ] {
+            let mut body = json!({"max_tokens": 128000, "stream": true});
+            if let Some(model) = model {
+                body["model"] = json!(model);
+            }
+            let expected = body.clone();
+            hook.on_request_body(&mut body, &meta);
+            assert_eq!(body, expected, "model={model:?}");
+        }
+    }
+
+    #[test]
+    fn codeagent_3_caps_converted_requests_before_serialization() {
+        let hook = HuaweiCodeAgentProxyHook::new();
+        for app_target in ["claude", "claude_desktop"] {
+            let meta = meta_with_app_target("huawei_codeagent_3", app_target);
+            let mut body = crate::proxy::providers::transform::anthropic_to_openai(json!({
+                "model": VERIFIED_MODELS[0], "max_tokens": 128000, "stream": false,
+                "messages": [{"role": "user", "content": "synthetic test"}]
+            }))
+            .unwrap();
+            assert_eq!(body["max_tokens"], 128000);
+            hook.on_request_body(&mut body, &meta);
+            let wire: Value = serde_json::from_slice(&serde_json::to_vec(&body).unwrap()).unwrap();
+            assert_eq!(wire["model"], VERIFIED_MODELS[0]);
+            assert_eq!(wire["max_tokens"], 65536);
+            assert_eq!(wire["stream"], true);
         }
     }
 
