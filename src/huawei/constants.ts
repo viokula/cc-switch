@@ -24,9 +24,7 @@ export const HUAWEI_PROVIDER_TYPES: readonly string[] = [
 export function isHuaweiProviderType(
   providerType: string | null | undefined,
 ): boolean {
-  return (
-    providerType != null && HUAWEI_PROVIDER_TYPES.includes(providerType)
-  );
+  return providerType != null && HUAWEI_PROVIDER_TYPES.includes(providerType);
 }
 
 /**

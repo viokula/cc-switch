@@ -49,7 +49,11 @@ export async function fetchModelsForConfig(
   modelsUrl?: string,
   customUserAgent?: string,
   options?: ModelFetchOptions,
-  extraAuthHeaders?: Array<{ name: string; value?: string; tokenSource?: string }>,
+  extraAuthHeaders?: Array<{
+    name: string;
+    value?: string;
+    tokenSource?: string;
+  }>,
 ): Promise<FetchedModel[]> {
   return invoke("fetch_models_for_config", {
     baseUrl,

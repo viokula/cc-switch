@@ -102,7 +102,9 @@ interface ClaudeFormFieldsProps {
   onCodexFastModeChange?: (enabled: boolean) => void;
 
   // Extension Auth Section (lazy-loaded)
-  extensionAuthSection?: React.LazyExoticComponent<React.ComponentType<Record<string, unknown>>>;
+  extensionAuthSection?: React.LazyExoticComponent<
+    React.ComponentType<Record<string, unknown>>
+  >;
   extensionFetchModels?: () => Promise<FetchedModel[]>;
 
   // xAI OAuth
@@ -598,7 +600,9 @@ export function ClaudeFormFields({
 
     // 普通供应商 / extension auth: 使用 ModelInputWithFetch
     const models = hasExtensionAuth ? extensionModels : fetchedModels;
-    const loading = hasExtensionAuth ? extensionModelsLoading : isFetchingModels;
+    const loading = hasExtensionAuth
+      ? extensionModelsLoading
+      : isFetchingModels;
     return (
       <ModelInputWithFetch
         id={id}
@@ -1146,7 +1150,9 @@ export function ClaudeFormFields({
               id="claude-custom-user-agent"
               value={customUserAgent}
               onChange={onCustomUserAgentChange}
-              help={t("providerForm.customUserAgentHelp", { defaultValue: "自定义发送给上游 API 的 User-Agent 头" })}
+              help={t("providerForm.customUserAgentHelp", {
+                defaultValue: "自定义发送给上游 API 的 User-Agent 头",
+              })}
             />
 
             <div className="border-t border-border-default pt-3">
@@ -1155,7 +1161,9 @@ export function ClaudeFormFields({
                 bodyJson={localProxyBodyOverride}
                 onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
                 onBodyJsonChange={onLocalProxyBodyOverrideChange}
-                help={t("providerForm.localProxyRequestOverridesHelp", { defaultValue: "覆盖本地代理转发请求时使用的头和体" })}
+                help={t("providerForm.localProxyRequestOverridesHelp", {
+                  defaultValue: "覆盖本地代理转发请求时使用的头和体",
+                })}
               />
             </div>
           </CollapsibleContent>

@@ -11,6 +11,12 @@ for (const [locale, resources] of [
   ["zh-TW", zhTw],
 ] as const) {
   for (const ns of Object.keys(resources)) {
-    i18n.addResourceBundle(locale, "translation", { [ns]: resources[ns as keyof typeof resources] }, true, true);
+    i18n.addResourceBundle(
+      locale,
+      "translation",
+      { [ns]: resources[ns as keyof typeof resources] },
+      true,
+      true,
+    );
   }
 }
