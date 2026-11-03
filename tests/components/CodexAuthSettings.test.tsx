@@ -50,19 +50,19 @@ async function renderWith(classic: boolean, onChange = vi.fn()) {
 
 describe("CodexAuthSettings classic sub-agent toggle", () => {
   beforeEach(() => {
-    forcesMultiAgentV2Mock.mockReset();
+    forcesMultiAgentV2Mock.mockReset().mockResolvedValue(false);
     getCompressionMock.mockResolvedValue(false);
     diskUsageMock.mockResolvedValue(0);
   });
 
-  // 开关挪到了 Codex 聚合页签的「聚合设置」（StackSettingsSheet），设置页不再显示
-  it("is no longer on the settings page", async () => {
-    await renderWith(true);
+  it("reflects and updates the classic sub-agent setting", async () => {
+    const onChange = await renderWith(true);
+    const toggle = screen.getByRole("switch", { name: LABEL });
 
-    expect(
-      screen.queryByRole("switch", { name: LABEL }),
-    ).not.toBeInTheDocument();
-    expect(forcesMultiAgentV2Mock).not.toHaveBeenCalled();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(forcesMultiAgentV2Mock).toHaveBeenCalledTimes(1);
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith({ codexStackClassicTools: false });
   });
 });
 

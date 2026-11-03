@@ -881,7 +881,9 @@ describe("App integration with MSW", () => {
     await waitFor(() =>
       expect(toastErrorMock).toHaveBeenCalledWith(
         "notifications.removeFromConfigFailed",
-        expect.objectContaining({ description: "kimi.error.defaultModelInUse" }),
+        expect.objectContaining({
+          description: "kimi.error.defaultModelInUse",
+        }),
       ),
     );
     await waitFor(() =>
@@ -927,7 +929,7 @@ describe("App integration with MSW", () => {
     fireEvent.click(screen.getByText("remove"));
 
     expect(screen.getByTestId("confirm-message")).toHaveTextContent(
-      /Pi's global default currently points to this provider/,
+      "confirm.piDefaultProviderWarning",
     );
     fireEvent.click(screen.getByText("confirm-delete"));
     await waitFor(() =>
@@ -972,7 +974,7 @@ describe("App integration with MSW", () => {
 
     await waitFor(() => {
       expect(toastErrorMock).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to read provider identifiers from config"),
+        expect.stringMatching(/读取配置中的供应商标识失败.*broken config/),
       );
     });
 
@@ -994,13 +996,11 @@ describe("App integration with MSW", () => {
     expect(await screen.findByTestId("unified-skills-panel")).toHaveTextContent(
       "installed",
     );
-    const checkUpdatesButton = await screen.findByRole("button", {
-      name: /Check Updates/i,
-    });
-    await waitFor(() => expect(checkUpdatesButton).toBeEnabled());
-
-    fireEvent.click(checkUpdatesButton);
-    // skillsPanelMocks.checkUpdates might not exist in this version; just verify button was clicked
+    expect(skillsPanelMocks.initialViews).toContain("installed");
+    // The mocked panel owns its toolbar; App must not render a duplicate.
+    expect(
+      screen.queryByRole("button", { name: /Check Updates/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("navigates OpenClaw and Hermes pages with underline tabs", async () => {

@@ -1998,7 +1998,9 @@ function ProviderFormFull({
         ? "codex_oauth"
         : isXaiOauthProvider
           ? "xai_oauth"
-          : presetDeclaredProviderType;
+          : isCodexOfficialProvider
+            ? undefined
+            : presetDeclaredProviderType;
 
     const extensionMeta = getFormExtensionSaveMeta(providerType, {
       appId,

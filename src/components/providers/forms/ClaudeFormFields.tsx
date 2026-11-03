@@ -698,7 +698,6 @@ export function ClaudeFormFields({
     modelField: ClaudeModelEnvField;
     displayNameField?: ClaudeModelEnvField;
     inputId: string;
-    supportsOneM?: boolean;
   };
 
   const modelRoleRows: ModelRoleRow[] = [
@@ -1354,19 +1353,17 @@ export function ClaudeFormFields({
                           setClaudeOneMMarker(value, usesOneM),
                         ),
                     )}
-                    {row.supportsOneM && (
-                      <label className="flex h-9 items-center gap-2 text-sm text-fg-2">
-                        <Checkbox
-                          checked={usesOneM}
-                          onCheckedChange={(checked) =>
-                            handleRoleOneMChange(row, checked === true)
-                          }
-                        />
-                        {t("providerForm.modelOneMLabel", {
-                          defaultValue: "1M",
-                        })}
-                      </label>
-                    )}
+                    <label className="flex h-9 items-center gap-2 text-sm text-fg-2">
+                      <Checkbox
+                        checked={usesOneM}
+                        onCheckedChange={(checked) =>
+                          handleRoleOneMChange(row, checked === true)
+                        }
+                      />
+                      {t("providerForm.modelOneMLabel", {
+                        defaultValue: "1M",
+                      })}
+                    </label>
                   </div>
                 );
               })}
