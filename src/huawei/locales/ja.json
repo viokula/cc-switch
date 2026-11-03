@@ -27,7 +27,11 @@
     "setAsDefault": "デフォルトに設定",
     "removeAccount": "アカウントを削除",
     "addOrReauth": "アカウントを追加または再ログイン",
-    "logoutAll": "すべてのアカウントを削除"
+    "logoutAll": "すべてのアカウントを削除",
+    "pluginVersion": "CodeAgent プラグインバージョン",
+    "pluginVersionDescription": "この端末にのみ保存され、すべての Huawei アカウントで共有されます。モデル一覧とクォータ照会専用で、推論、ログイン、インストール済み CLI には影響しません。既定値: cli-1.2615.02.03。",
+    "pluginVersionSave": "保存",
+    "pluginVersionReset": "既定値に戻す"
   },
   "providerForm": {
     "presets": {

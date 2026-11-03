@@ -1672,6 +1672,7 @@ pub fn run() {
             crate::huawei::auth::commands::huawei_codeagent_2_refresh_token,
             crate::huawei::auth::commands::huawei_codeagent_2_fetch_models,
             crate::huawei::auth::commands::huawei_codeagent_2_fetch_quota,
+            crate::huawei::auth::commands::huawei_codeagent_2_set_plugin_version,
             crate::huawei::auth::commands::huawei_codeagent_2_list_accounts,
             crate::huawei::auth::commands::huawei_codeagent_2_remove_account,
             crate::huawei::auth::commands::huawei_codeagent_2_set_default_account,

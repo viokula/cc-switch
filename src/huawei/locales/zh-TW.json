@@ -27,7 +27,11 @@
     "setAsDefault": "設為預設",
     "removeAccount": "移除帳號",
     "addOrReauth": "新增帳號或重新登入",
-    "logoutAll": "移除所有帳號"
+    "logoutAll": "移除所有帳號",
+    "pluginVersion": "CodeAgent 外掛版本",
+    "pluginVersionDescription": "僅儲存在本機，所有華為帳號共用。僅用於模型清單和額度查詢，不影響推理、登入或已安裝的 CLI。預設值：cli-1.2615.02.03。",
+    "pluginVersionSave": "儲存",
+    "pluginVersionReset": "恢復預設"
   },
   "providerForm": {
     "presets": {

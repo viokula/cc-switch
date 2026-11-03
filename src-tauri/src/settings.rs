@@ -604,6 +604,8 @@ pub struct AppSettings {
     /// 只对这台机器有意义，所以不放在会随云同步覆盖的 proxy_config 表里。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_client_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huawei_codeagent_plugin_version: Option<String>,
 
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -716,6 +718,7 @@ impl Default for AppSettings {
             current_provider_hermes: None,
             current_provider_agy: None,
             proxy_client_host: None,
+            huawei_codeagent_plugin_version: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -1079,6 +1082,38 @@ pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
     });
     *guard = new_settings;
     Ok(())
+}
+
+pub const DEFAULT_HUAWEI_CODEAGENT_PLUGIN_VERSION: &str = "cli-1.2615.02.03";
+
+fn normalize_huawei_codeagent_plugin_version(version: &str) -> Result<Option<String>, AppError> {
+    let version = version.trim();
+    if version.is_empty() {
+        return Ok(None);
+    }
+    reqwest::header::HeaderValue::from_str(version).map_err(|_| {
+        AppError::InvalidInput("Invalid Huawei CodeAgent plugin-version HTTP header".into())
+    })?;
+    Ok(Some(version.to_string()))
+}
+
+impl AppSettings {
+    pub fn effective_huawei_codeagent_plugin_version(&self) -> &str {
+        self.huawei_codeagent_plugin_version
+            .as_deref()
+            .unwrap_or(DEFAULT_HUAWEI_CODEAGENT_PLUGIN_VERSION)
+    }
+}
+
+pub fn get_huawei_codeagent_plugin_version() -> String {
+    get_settings()
+        .effective_huawei_codeagent_plugin_version()
+        .to_string()
+}
+
+pub fn set_huawei_codeagent_plugin_version(version: &str) -> Result<(), AppError> {
+    let version = normalize_huawei_codeagent_plugin_version(version)?;
+    mutate_settings(|settings| settings.huawei_codeagent_plugin_version = version)
 }
 
 fn mutate_settings<F>(mutator: F) -> Result<(), AppError>
@@ -1848,6 +1883,35 @@ mod tests {
         assert!(write_settings_to_path(&path, &AppSettings::default(), &pending).is_err());
         assert!(pending.load(Ordering::SeqCst));
         assert!(path.is_dir());
+    }
+
+    #[test]
+    fn huawei_plugin_version_default_custom_reset_and_invalid() {
+        let mut settings = AppSettings::default();
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "cli-1.2615.02.03"
+        );
+        settings.huawei_codeagent_plugin_version =
+            normalize_huawei_codeagent_plugin_version("  custom/2.0 beta  ").unwrap();
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "custom/2.0 beta"
+        );
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["huaweiCodeagentPluginVersion"],
+            "custom/2.0 beta"
+        );
+        settings.huawei_codeagent_plugin_version =
+            normalize_huawei_codeagent_plugin_version("  ").unwrap();
+        assert!(settings.huawei_codeagent_plugin_version.is_none());
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "cli-1.2615.02.03"
+        );
+        for invalid in ["cli\r\ninjected: value", "cli\0version"] {
+            assert!(normalize_huawei_codeagent_plugin_version(invalid).is_err());
+        }
     }
 
     #[test]
