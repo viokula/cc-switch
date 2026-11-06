@@ -378,6 +378,39 @@ pub struct CodexLegacyOfficialHistoryBucketMigration {
     pub codex_config_dir: Option<String>,
 }
 
+/// Used-percentage cutoffs for the Codex ChatGPT proxy. Independent windows.
+/// Opt-in: unknown usage never blocks, so leaving it off changes nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CodexQuotaProtection {
+    pub enabled: bool,
+    pub five_hour_threshold: u8,
+    pub weekly_threshold: u8,
+}
+
+impl Default for CodexQuotaProtection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            five_hour_threshold: 95,
+            weekly_threshold: 98,
+        }
+    }
+}
+
+impl CodexQuotaProtection {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if !(1..=99).contains(&self.five_hour_threshold)
+            || !(1..=99).contains(&self.weekly_threshold)
+        {
+            return Err(AppError::Config(
+                "Codex quota protection thresholds must be integers from 1 to 99".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// 用量金额的显示方式。只影响显示：库里的费用一律是美元，按 `exchange_rates`
 /// （或自动获取到的 `auto_exchange_rates`）换算后显示；值的合法性（认不认得币种、
 /// 汇率是否为正数）由前端兜底。
@@ -490,6 +523,9 @@ pub struct AppSettings {
     /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
     #[serde(default)]
     pub preserve_codex_official_auth_on_switch: bool,
+    /// Pre-exhaustion protection for ChatGPT requests passing through the Codex proxy.
+    #[serde(default)]
+    pub codex_quota_protection: CodexQuotaProtection,
     /// Run official Codex providers under the shared "custom" model_provider id
     /// so official sessions share one resume-history bucket with third-party
     /// providers. Opt-in: defaults to false.
@@ -568,6 +604,9 @@ pub struct AppSettings {
     pub pi_config_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub omp_config_dir: Option<String>,
+    /// DeepSeek Harness 主目录（相当于 `DSH_HOME`，优先于环境变量）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_config_dir: Option<String>,
 
     // ===== 当前供应商 ID（设备级）=====
     /// 当前 Claude 供应商 ID（本地存储，优先于数据库 is_current）
@@ -604,6 +643,8 @@ pub struct AppSettings {
     /// 只对这台机器有意义，所以不放在会随云同步覆盖的 proxy_config 表里。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy_client_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub huawei_codeagent_plugin_version: Option<String>,
 
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
@@ -682,6 +723,7 @@ impl Default for AppSettings {
             check_tool_updates_on_startup: false,
             native_tray_menu: false,
             preserve_codex_official_auth_on_switch: false,
+            codex_quota_protection: CodexQuotaProtection::default(),
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
             codex_stack_classic_tools: true,
@@ -706,6 +748,7 @@ impl Default for AppSettings {
             hermes_config_dir: None,
             pi_config_dir: None,
             omp_config_dir: None,
+            dsh_config_dir: None,
             current_provider_claude: None,
             current_provider_claude_desktop: None,
             current_provider_codex: None,
@@ -716,6 +759,7 @@ impl Default for AppSettings {
             current_provider_hermes: None,
             current_provider_agy: None,
             proxy_client_host: None,
+            huawei_codeagent_plugin_version: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
@@ -803,6 +847,13 @@ impl AppSettings {
 
         self.omp_config_dir = self
             .omp_config_dir
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
+        self.dsh_config_dir = self
+            .dsh_config_dir
             .as_ref()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -1070,6 +1121,7 @@ pub fn get_settings_for_frontend() -> AppSettings {
 }
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
+    new_settings.codex_quota_protection.validate()?;
     new_settings.normalize_paths();
     save_settings_file(&new_settings)?;
 
@@ -1079,6 +1131,38 @@ pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {
     });
     *guard = new_settings;
     Ok(())
+}
+
+pub const DEFAULT_HUAWEI_CODEAGENT_PLUGIN_VERSION: &str = "cli-1.2615.02.03";
+
+fn normalize_huawei_codeagent_plugin_version(version: &str) -> Result<Option<String>, AppError> {
+    let version = version.trim();
+    if version.is_empty() {
+        return Ok(None);
+    }
+    reqwest::header::HeaderValue::from_str(version).map_err(|_| {
+        AppError::InvalidInput("Invalid Huawei CodeAgent plugin-version HTTP header".into())
+    })?;
+    Ok(Some(version.to_string()))
+}
+
+impl AppSettings {
+    pub fn effective_huawei_codeagent_plugin_version(&self) -> &str {
+        self.huawei_codeagent_plugin_version
+            .as_deref()
+            .unwrap_or(DEFAULT_HUAWEI_CODEAGENT_PLUGIN_VERSION)
+    }
+}
+
+pub fn get_huawei_codeagent_plugin_version() -> String {
+    get_settings()
+        .effective_huawei_codeagent_plugin_version()
+        .to_string()
+}
+
+pub fn set_huawei_codeagent_plugin_version(version: &str) -> Result<(), AppError> {
+    let version = normalize_huawei_codeagent_plugin_version(version)?;
+    mutate_settings(|settings| settings.huawei_codeagent_plugin_version = version)
 }
 
 fn mutate_settings<F>(mutator: F) -> Result<(), AppError>
@@ -1310,6 +1394,14 @@ pub fn get_omp_override_dir() -> Option<PathBuf> {
     let settings = settings_store().read().ok()?;
     settings
         .omp_config_dir
+        .as_ref()
+        .map(|path| resolve_override_path(path))
+}
+
+pub fn get_dsh_override_dir() -> Option<PathBuf> {
+    let settings = settings_store().read().ok()?;
+    settings
+        .dsh_config_dir
         .as_ref()
         .map(|path| resolve_override_path(path))
 }
@@ -1848,6 +1940,35 @@ mod tests {
         assert!(write_settings_to_path(&path, &AppSettings::default(), &pending).is_err());
         assert!(pending.load(Ordering::SeqCst));
         assert!(path.is_dir());
+    }
+
+    #[test]
+    fn huawei_plugin_version_default_custom_reset_and_invalid() {
+        let mut settings = AppSettings::default();
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "cli-1.2615.02.03"
+        );
+        settings.huawei_codeagent_plugin_version =
+            normalize_huawei_codeagent_plugin_version("  custom/2.0 beta  ").unwrap();
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "custom/2.0 beta"
+        );
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["huaweiCodeagentPluginVersion"],
+            "custom/2.0 beta"
+        );
+        settings.huawei_codeagent_plugin_version =
+            normalize_huawei_codeagent_plugin_version("  ").unwrap();
+        assert!(settings.huawei_codeagent_plugin_version.is_none());
+        assert_eq!(
+            settings.effective_huawei_codeagent_plugin_version(),
+            "cli-1.2615.02.03"
+        );
+        for invalid in ["cli\r\ninjected: value", "cli\0version"] {
+            assert!(normalize_huawei_codeagent_plugin_version(invalid).is_err());
+        }
     }
 
     #[test]

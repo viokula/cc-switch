@@ -51,6 +51,7 @@ fn merge_settings_for_save(
     // 客户端地址只经 set_proxy_client_host 保存（它还要重写客户端）；全量保存带的是前端
     // 缓存里的旧值，透传会把刚保存的地址冲掉。
     incoming.proxy_client_host = existing.proxy_client_host.clone();
+    incoming.huawei_codeagent_plugin_version = existing.huawei_codeagent_plugin_version.clone();
     // 轻量模式状态只由进入 / 退出轻量模式时写，前端缓存里的值总是旧的。
     incoming.lightweight_mode = existing.lightweight_mode;
     incoming
@@ -419,6 +420,22 @@ mod tests {
         let merged = merge_settings_for_save(AppSettings::default(), &existing);
 
         assert!(merged.lightweight_mode);
+    }
+
+    #[test]
+    fn save_settings_should_keep_the_existing_huawei_plugin_version() {
+        for version in [None, Some("custom-version".to_string())] {
+            let existing = AppSettings {
+                huawei_codeagent_plugin_version: version.clone(),
+                ..AppSettings::default()
+            };
+            let incoming = AppSettings {
+                huawei_codeagent_plugin_version: Some("stale-version".to_string()),
+                ..AppSettings::default()
+            };
+            let merged = merge_settings_for_save(incoming, &existing);
+            assert_eq!(merged.huawei_codeagent_plugin_version, version);
+        }
     }
 
     #[test]

@@ -27,7 +27,11 @@
     "setAsDefault": "Set as Default",
     "removeAccount": "Remove Account",
     "addOrReauth": "Add account or re-login",
-    "logoutAll": "Remove all accounts"
+    "logoutAll": "Remove all accounts",
+    "pluginVersion": "CodeAgent plugin version",
+    "pluginVersionDescription": "Local to this device, shared by all Huawei accounts. Only used for model-list and quota queries; does not change inference, login, or the installed CLI. Default: cli-1.2615.02.03.",
+    "pluginVersionSave": "Save",
+    "pluginVersionReset": "Reset to default"
   },
   "providerForm": {
     "presets": {

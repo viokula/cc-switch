@@ -6,6 +6,10 @@ import type {
 } from "./types";
 
 export const huaweiCodeAgent2Api = {
+  async setPluginVersion(version: string): Promise<string> {
+    return invoke("huawei_codeagent_2_set_plugin_version", { version });
+  },
+
   async startLogin(
     user: string,
     password: string,

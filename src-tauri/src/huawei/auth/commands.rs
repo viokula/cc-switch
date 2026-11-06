@@ -8,6 +8,12 @@ use std::sync::Arc;
 pub struct HuaweiCodeAgentAuthState(pub Arc<HuaweiCodeAgentAuthManager>);
 
 #[tauri::command]
+pub fn huawei_codeagent_2_set_plugin_version(version: String) -> Result<String, AppError> {
+    crate::settings::set_huawei_codeagent_plugin_version(&version)?;
+    Ok(crate::settings::get_huawei_codeagent_plugin_version())
+}
+
+#[tauri::command]
 pub async fn huawei_codeagent_2_start_login(
     user: String,
     password: String,
