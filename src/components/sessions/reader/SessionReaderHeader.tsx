@@ -733,6 +733,8 @@ export const SessionReaderToolbar = memo(function SessionReaderToolbar({
                 })}
                 autoComplete="off"
                 spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
                 className={cn(fieldClass, "h-7 pe-2 ps-7 text-caption")}
               />
             </div>
