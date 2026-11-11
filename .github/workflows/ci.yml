@@ -5,7 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # 每周一次全量：push 到 main 也按路径过滤后，靠它在缓存被淘汰后重新建起来
+  # 每周一次全量（包含 macOS）：日常 PR / push 只检查 Linux 和 Windows，定时运行也重建被淘汰的缓存。
   schedule:
     - cron: "41 19 * * 0" # 周一 03:41（北京时间）
   workflow_dispatch:
@@ -138,7 +138,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
+        # macOS 保留每周和手动检查；不占用日常 PR / push 的运行时间。Mac 发版仍由 release.yml 完整构建。
+        os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '["ubuntu-22.04", "windows-latest", "macos-latest"]' || '["ubuntu-22.04", "windows-latest"]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
