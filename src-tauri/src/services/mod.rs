@@ -20,6 +20,7 @@ pub mod pi_prompt_files;
 pub(crate) mod pi_state;
 pub mod profile;
 pub mod prompt;
+pub mod prompt_optimizer;
 pub mod provider;
 pub mod proxy;
 pub mod s3;

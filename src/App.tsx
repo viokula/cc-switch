@@ -177,6 +177,9 @@ const SessionManagerPage = lazy(() =>
 const UsageScriptModal = lazy(() => import("@/components/UsageScriptModal"));
 const UnifiedMcpPanel = lazy(() => import("@/components/mcp/UnifiedMcpPanel"));
 const PromptPanel = lazy(() => import("@/components/prompts/PromptPanel"));
+const PromptOptimizerPage = lazy(
+  () => import("@/components/promptOptimizer/PromptOptimizerPage"),
+);
 const UnifiedSkillsPanel = lazy(
   () => import("@/components/skills/UnifiedSkillsPanel"),
 );
@@ -1880,6 +1883,8 @@ function App() {
             />
           </div>
         );
+      case "promptOptimizer":
+        return <PromptOptimizerPage />;
       case "sessions":
         // 页头（含 ⋯ 菜单）由会话页自己画：菜单里的操作都在页面状态里
         return (

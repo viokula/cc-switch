@@ -21,6 +21,7 @@ import {
   Server,
   Settings,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
 import type { AppId } from "@/lib/api";
 import type { VisibleApps } from "@/types";
@@ -287,6 +288,11 @@ function MainDirectory({
     { page: "mcp", label: "MCP", icon: Server },
     { page: "skills", label: "Skills", icon: SkillsIcon },
     { page: "prompts", label: t("nav.prompts"), icon: BookOpen },
+    {
+      page: "promptOptimizer",
+      label: t("nav.promptOptimizer"),
+      icon: Sparkles,
+    },
     { page: "sessions", label: t("nav.sessions"), icon: History },
     {
       page: "auth",

@@ -21,6 +21,7 @@ export type GlobalPage =
   | "skills"
   | "skillsDiscovery"
   | "prompts"
+  | "promptOptimizer"
   | "sessions"
   | "apps";
 
@@ -57,6 +58,7 @@ const GLOBAL_PAGES: GlobalPage[] = [
   "skills",
   "skillsDiscovery",
   "prompts",
+  "promptOptimizer",
   "sessions",
   "apps",
 ];

@@ -225,14 +225,20 @@ function cjkThousandUnits(locale: string): Array<[number, string]> | null {
 export function createUsageTrendTokenTickFormatter(
   locale: string,
 ): UsageTrendTokenTickFormatter {
-  const compact = new Intl.NumberFormat(locale, {
+  // 无效 locale（如 "zhb"）会让 Intl 回落到系统语言，中文系统上仍会输出「万」。
+  // 只在 BCP-47 可解析时使用它，否则回退英文。
+  const resolved =
+    Intl.NumberFormat.supportedLocalesOf([locale]).length > 0
+      ? locale
+      : "en-US";
+  const compact = new Intl.NumberFormat(resolved, {
     notation: "compact",
     compactDisplay: "short",
     maximumFractionDigits: 1,
   });
-  const units = cjkThousandUnits(locale);
+  const units = cjkThousandUnits(resolved);
   if (!units) return compact;
-  const plain = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+  const plain = new Intl.NumberFormat(resolved, { maximumFractionDigits: 1 });
   return {
     format(value) {
       const abs = Math.abs(value);

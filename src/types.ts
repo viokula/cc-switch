@@ -418,6 +418,10 @@ export interface FetchedExchangeRates {
 // 存储在本地 ~/.cc-switch/settings.json，不随数据库同步
 export interface Settings {
   huaweiCodeagentPluginVersion?: string;
+  // ===== 提示词优化（设备级）=====
+  promptOptimizerApp?: string;
+  promptOptimizerProviderId?: string;
+  promptOptimizerModel?: string;
   // ===== 设备级 UI 设置 =====
   // 是否在系统托盘（macOS 菜单栏）显示图标
   showInTray: boolean;

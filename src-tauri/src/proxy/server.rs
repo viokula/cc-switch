@@ -264,6 +264,56 @@ impl ProxyServer {
         }
     }
 
+    /// 供 CC Switch 自身功能（如提示词优化）使用的一次性转发。
+    ///
+    /// 不监听端口、不读写当前路由状态、不参与故障转移；鉴权注入、请求格式转换
+    /// 与上游调用仍由 [`super::forwarder::RequestForwarder`] 负责。
+    pub async fn forward_once(
+        &self,
+        app_type: &crate::app_config::AppType,
+        provider: &crate::provider::Provider,
+        endpoint: &str,
+        body: &serde_json::Value,
+    ) -> Result<super::forwarder::ForwardResult, ProxyError> {
+        let state = &self.state;
+        let forwarder = super::forwarder::RequestForwarder::new(
+            state.provider_router.clone(),
+            120,
+            state.status.clone(),
+            state.current_providers.clone(),
+            state.gemini_shadow.clone(),
+            state.codex_chat_history.clone(),
+            state.failover_manager.clone(),
+            state.app_handle.clone(),
+            provider.id.clone(),
+            format!("cc-switch-internal-{}", std::process::id()),
+            true,
+            60,
+            0,
+            RectifierConfig {
+                enabled: false,
+                ..Default::default()
+            },
+            OptimizerConfig::default(),
+            CopilotOptimizerConfig::default(),
+            0,
+        )
+        // Stack 语义：不碰熔断器/当前供应商/代理统计，模型名按调用方给的直接用。
+        .stack_request(true);
+        forwarder
+            .forward_with_retry(
+                app_type,
+                http::Method::POST,
+                endpoint,
+                body,
+                http::HeaderMap::new(),
+                http::Extensions::new(),
+                std::slice::from_ref(provider),
+            )
+            .await
+            .map_err(|error| error.error)
+    }
+
     pub async fn get_status(&self) -> ProxyStatus {
         let mut status = self.state.status.read().await.clone();
 

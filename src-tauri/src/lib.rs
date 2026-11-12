@@ -1917,6 +1917,8 @@ pub fn run() {
             commands::fetch_exchange_rates,
             // Stream health check
             commands::stream_check_provider,
+            // Prompt optimizer
+            commands::optimize_prompt,
             // Session manager
             commands::list_sessions,
             commands::sync_session_index,

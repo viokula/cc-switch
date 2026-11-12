@@ -675,6 +675,17 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub huawei_codeagent_plugin_version: Option<String>,
 
+    // ===== 提示词优化（设备级）=====
+    /// 提示词优化使用的应用类型（如 claude、codex）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_optimizer_app: Option<String>,
+    /// 提示词优化使用的供应商 ID。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_optimizer_provider_id: Option<String>,
+    /// 提示词优化使用的模型；空表示沿用供应商配置里的模型。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_optimizer_model: Option<String>,
+
     // ===== Skill 同步设置 =====
     /// Skill 同步方式：auto（默认，优先 symlink）、symlink、copy
     #[serde(default)]
@@ -796,6 +807,9 @@ impl Default for AppSettings {
             current_provider_copilot: None,
             proxy_client_host: None,
             huawei_codeagent_plugin_version: None,
+            prompt_optimizer_app: None,
+            prompt_optimizer_provider_id: None,
+            prompt_optimizer_model: None,
             skill_sync_method: SyncMethod::default(),
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
