@@ -288,19 +288,6 @@ pub fn apply_proxy(proxy_url: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-/// 更新代理配置（热更新）
-///
-/// 可在运行时调用以更改代理设置，无需重启应用。
-/// 注意：此函数同时验证和应用，如果需要先验证后持久化再应用，
-/// 请使用 validate_proxy + apply_proxy 组合。
-///
-/// # Arguments
-/// * `proxy_url` - 新的代理 URL，None 或空字符串表示跟随环境／系统代理
-#[allow(dead_code)]
-pub fn update_proxy(proxy_url: Option<&str>) -> Result<(), String> {
-    apply_proxy(proxy_url)
-}
-
 /// 获取全局 HTTP 客户端
 ///
 /// 返回配置了代理的客户端（如果已配置代理），否则返回跟随系统代理的客户端。
@@ -463,12 +450,6 @@ pub fn get_current_proxy_url() -> Option<String> {
         .get()
         .and_then(|lock| lock.read().ok())
         .and_then(|state| state.policy.configured_url.clone())
-}
-
-/// 检查是否正在使用代理
-#[allow(dead_code)]
-pub fn is_proxy_enabled() -> bool {
-    get_current_proxy_url().is_some()
 }
 
 /// 两种客户端共用的参数

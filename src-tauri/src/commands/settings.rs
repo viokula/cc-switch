@@ -68,13 +68,11 @@ fn merge_settings_for_save(
     incoming
 }
 
-/// 获取设置
 #[tauri::command]
 pub async fn get_settings() -> Result<crate::settings::AppSettings, String> {
     Ok(crate::settings::get_settings_for_frontend())
 }
 
-/// 保存设置
 #[tauri::command]
 pub async fn save_settings(
     app: tauri::AppHandle,
@@ -97,6 +95,8 @@ pub async fn save_settings(
     let tray_style_changed = merged.native_tray_menu != existing.native_tray_menu;
     let without_login_changed =
         merged.codex_proxy_without_official_login != existing.codex_proxy_without_official_login;
+    let preserve_login_changed = merged.preserve_codex_official_auth_on_switch
+        != existing.preserve_codex_official_auth_on_switch;
     crate::settings::update_settings(merged).map_err(|e| e.to_string())?;
 
     // 原生托盘菜单 / 托盘面板当场切换，不用重启。
@@ -135,6 +135,25 @@ pub async fn save_settings(
             }
             return Err(format!(
                 "「暂停使用官方登录」未生效（Codex 配置重写失败） (\"Pause the official login\" did not take effect: rewriting the Codex config failed): {err}"
+            ));
+        }
+    }
+
+    // 「非接管切换时保留官方登录」只影响直连切到第三方：当前就是直连第三方时立即重写，
+    // 不必先切回官方卡再切回来；失败回滚。
+    if preserve_login_changed {
+        if let Err(err) =
+            crate::services::provider::reapply_current_codex_third_party_live(state.inner())
+        {
+            log::warn!("「非接管切换时保留官方登录」变更后重写 Codex 配置失败，回滚设置: {err}");
+            let mut rollback = crate::settings::get_settings();
+            rollback.preserve_codex_official_auth_on_switch =
+                existing.preserve_codex_official_auth_on_switch;
+            if let Err(rollback_err) = crate::settings::update_settings(rollback) {
+                log::error!("回滚「非接管切换时保留官方登录」设置失败: {rollback_err}");
+            }
+            return Err(format!(
+                "「非接管切换时保留官方登录」未生效（Codex 配置重写失败） (\"Keep official login for direct switches\" did not take effect: rewriting the Codex config failed): {err}"
             ));
         }
     }
@@ -438,7 +457,6 @@ pub async fn set_app_config_dir_override(
     Ok(true)
 }
 
-/// 设置开机自启
 #[tauri::command]
 pub async fn set_auto_launch(enabled: bool) -> Result<bool, String> {
     if enabled {
@@ -799,13 +817,11 @@ mod tests {
     }
 }
 
-/// 获取开机自启状态
 #[tauri::command]
 pub async fn get_auto_launch_status() -> Result<bool, String> {
     crate::auto_launch::is_auto_launch_enabled().map_err(|e| format!("获取开机自启状态失败: {e}"))
 }
 
-/// 获取整流器配置
 #[tauri::command]
 pub async fn get_rectifier_config(
     state: tauri::State<'_, crate::AppState>,
@@ -813,7 +829,6 @@ pub async fn get_rectifier_config(
     state.db.get_rectifier_config().map_err(|e| e.to_string())
 }
 
-/// 设置整流器配置
 #[tauri::command]
 pub async fn set_rectifier_config(
     state: tauri::State<'_, crate::AppState>,
@@ -826,7 +841,6 @@ pub async fn set_rectifier_config(
     Ok(true)
 }
 
-/// 获取优化器配置
 #[tauri::command]
 pub async fn get_optimizer_config(
     state: tauri::State<'_, crate::AppState>,
@@ -834,7 +848,6 @@ pub async fn get_optimizer_config(
     state.db.get_optimizer_config().map_err(|e| e.to_string())
 }
 
-/// 设置优化器配置
 #[tauri::command]
 pub async fn set_optimizer_config(
     state: tauri::State<'_, crate::AppState>,
@@ -847,7 +860,6 @@ pub async fn set_optimizer_config(
     Ok(true)
 }
 
-/// 获取隐私过滤器配置
 #[tauri::command]
 pub async fn get_privacy_filter_config(
     state: tauri::State<'_, crate::AppState>,
@@ -858,7 +870,6 @@ pub async fn get_privacy_filter_config(
         .map_err(|e| e.to_string())
 }
 
-/// 设置隐私过滤器配置
 #[tauri::command]
 pub async fn set_privacy_filter_config(
     state: tauri::State<'_, crate::AppState>,
@@ -875,7 +886,6 @@ pub async fn set_privacy_filter_config(
     Ok(true)
 }
 
-/// 获取 Copilot 优化器配置
 #[tauri::command]
 pub async fn get_copilot_optimizer_config(
     state: tauri::State<'_, crate::AppState>,
@@ -886,7 +896,6 @@ pub async fn get_copilot_optimizer_config(
         .map_err(|e| e.to_string())
 }
 
-/// 设置 Copilot 优化器配置
 #[tauri::command]
 pub async fn set_copilot_optimizer_config(
     state: tauri::State<'_, crate::AppState>,
@@ -899,7 +908,6 @@ pub async fn set_copilot_optimizer_config(
     Ok(true)
 }
 
-/// 获取日志配置
 #[tauri::command]
 pub async fn get_log_config(
     state: tauri::State<'_, crate::AppState>,
@@ -907,7 +915,6 @@ pub async fn get_log_config(
     state.db.get_log_config().map_err(|e| e.to_string())
 }
 
-/// 设置日志配置
 #[tauri::command]
 pub async fn set_log_config(
     state: tauri::State<'_, crate::AppState>,
