@@ -20,6 +20,7 @@ pub mod pi_prompt_files;
 pub(crate) mod pi_state;
 pub mod profile;
 pub mod prompt;
+pub mod prompt_optimizer;
 pub mod provider;
 pub mod proxy;
 pub mod s3;
@@ -62,8 +63,11 @@ pub use usage_stats::{
     RequestLogDetail, UsageSummary, UsageSummaryByApp,
 };
 
+pub mod session_usage_copilot;
 pub mod session_usage_kimi;
 pub mod session_usage_mcode;
 
 pub mod session_usage_agy;
 pub mod session_usage_dsh;
+pub mod session_usage_workbuddy;
+pub mod workbuddy_account;

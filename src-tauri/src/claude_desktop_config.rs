@@ -287,7 +287,7 @@ pub fn get_status(db: &Database, proxy_running: bool) -> Result<ClaudeDesktopSta
 
     Ok(ClaudeDesktopStatus {
         supported: true,
-        installed: configured || detect_installed(&paths, &macos_app_bundle_candidates()),
+        installed: configured || detect_installed(&paths, macos_app_bundle_candidates().as_deref()),
         configured,
         applied_id,
         profile_path: Some(paths.profile_path.display().to_string()),
@@ -858,6 +858,24 @@ fn next_catalog_safe_route_id(
     }
 }
 
+/// Desktop 从模型发现接口最多收这么长的说明。
+const MAX_MODEL_DESCRIPTION_CHARS: usize = 100;
+
+/// 本地 `/v1/models` 给 Desktop 的模型说明。没有说明时 Desktop 按 id 里的档位词显示
+/// Anthropic 写死的那句（`claude-fable-*` 一律是 Fable 的），映射到别家模型就名不副实；
+/// 上游就是 Claude 模型也看不出走的是哪家。所以一律写 `<供应商名> · <上游模型名> · <窗口>`。
+pub fn discovered_model_description(
+    provider_name: &str,
+    upstream: &str,
+    supports_1m: bool,
+) -> String {
+    let window = if supports_1m { 1_000_000 } else { 0 };
+    crate::mode::stack::provider_model_description(provider_name, upstream, window)
+        .chars()
+        .take(MAX_MODEL_DESCRIPTION_CHARS)
+        .collect()
+}
+
 pub fn model_list_response(provider: &Provider) -> Result<Value, AppError> {
     let routes = proxy_model_routes(provider)?;
     let data: Vec<Value> = routes
@@ -872,6 +890,11 @@ pub fn model_list_response(provider: &Provider) -> Result<Value, AppError> {
             if route.supports_1m {
                 item["supports1m"] = json!(true);
             }
+            item["description"] = json!(discovered_model_description(
+                &provider.name,
+                &route.upstream_model,
+                route.supports_1m,
+            ));
             item
         })
         .collect();
@@ -1198,7 +1221,11 @@ pub fn gateway_base_url(proxy_url: &str) -> String {
 /// 重启 Desktop。
 ///
 /// 聚合模式下 `stack` 是其他几家发布的模型，排在路由那家后面（第一项是默认模型，仍是路由
-/// 那家的），并关掉模型发现：列表完全由这里决定。Desktop 最多收 200 条，多出的不写。
+/// 那家的）。Desktop 最多收 200 条，多出的不写。
+///
+/// 模型发现显式打开：只要有 `inferenceModels`，Desktop 就只用这份列表，发现到的条目只补
+/// 名字和说明，不会多出模型；不写这个开关时有列表就跳过发现，本地 `/v1/models` 给的说明
+/// 就用不上（见 [`discovered_model_description`]）。
 pub fn route_profile(
     db: &Database,
     route: &Provider,
@@ -1238,9 +1265,7 @@ pub fn route_profile(
         &get_or_create_gateway_token(db)?,
         Some(model_specs.as_slice()),
     );
-    if !stack.is_empty() {
-        profile["modelDiscoveryEnabled"] = json!(false);
-    }
+    profile["modelDiscoveryEnabled"] = json!(true);
     Ok(profile)
 }
 
@@ -1525,23 +1550,26 @@ fn meta_has_profile_entry(path: &Path) -> bool {
         })
 }
 
-/// Claude Desktop 没有可调的命令，只能推断装没装：它第一次启动就会建自己的数据目录
-/// （`claude_desktop_config.json` 所在的 `Claude`，不看 CC Switch 也会写的 `Claude-3p`），
-/// macOS 上另认应用包。
-fn detect_installed(paths: &ClaudeDesktopPaths, app_bundles: &[PathBuf]) -> bool {
-    paths.normal_config_path.parent().is_some_and(Path::is_dir)
-        || app_bundles.iter().any(|bundle| bundle.is_dir())
+/// Claude Desktop 没有可调的命令，只能推断装没装。
+///
+/// - macOS（`app_bundles` 为 `Some`）只认应用包：卸载就是把 Claude.app 拖进废纸篓，
+///   `~/Library/Application Support/Claude` 会留下，数据目录说明不了还装着（#9383）。
+/// - Windows / Linux 没有固定的安装位置可查，认它第一次启动就建的数据目录
+///   （`claude_desktop_config.json` 所在的 `Claude`，不看 CC Switch 也会写的 `Claude-3p`）。
+fn detect_installed(paths: &ClaudeDesktopPaths, app_bundles: Option<&[PathBuf]>) -> bool {
+    match app_bundles {
+        Some(bundles) => bundles.iter().any(|bundle| bundle.is_dir()),
+        None => paths.normal_config_path.parent().is_some_and(Path::is_dir),
+    }
 }
 
-fn macos_app_bundle_candidates() -> Vec<PathBuf> {
-    if cfg!(target_os = "macos") {
+fn macos_app_bundle_candidates() -> Option<Vec<PathBuf>> {
+    cfg!(target_os = "macos").then(|| {
         vec![
             PathBuf::from("/Applications/Claude.app"),
             get_home_dir().join("Applications").join("Claude.app"),
         ]
-    } else {
-        Vec::new()
-    }
+    })
 }
 
 fn is_supported_platform() -> bool {
@@ -1837,7 +1865,7 @@ mod tests {
             CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID.to_string(),
             "Claude Desktop Official".to_string(),
             json!({"env": {}}),
-            Some("https://claude.ai/download".to_string()),
+            Some("https://claude.com/download".to_string()),
         );
         provider.category = Some("official".to_string());
         provider
@@ -1934,21 +1962,38 @@ mod tests {
     }
 
     #[test]
-    fn detect_installed_reads_data_dir_or_app_bundle() {
+    fn detect_installed_reads_data_dir_without_app_bundles() {
         let temp = TempDir::new().expect("tempdir");
         let paths = test_paths(temp.path());
-        let bundle = temp.path().join("Claude.app");
-        assert!(!detect_installed(&paths, std::slice::from_ref(&bundle)));
+        assert!(!detect_installed(&paths, None));
 
         // 只有 CC Switch 写的 Claude-3p 不算
         fs::create_dir_all(paths.threep_config_path.parent().unwrap()).unwrap();
-        assert!(!detect_installed(&paths, std::slice::from_ref(&bundle)));
-
-        fs::create_dir_all(&bundle).unwrap();
-        assert!(detect_installed(&paths, std::slice::from_ref(&bundle)));
+        assert!(!detect_installed(&paths, None));
 
         fs::create_dir_all(paths.normal_config_path.parent().unwrap()).unwrap();
-        assert!(detect_installed(&paths, &[]));
+        assert!(detect_installed(&paths, None));
+    }
+
+    #[test]
+    fn detect_installed_with_app_bundles_ignores_leftover_data_dir() {
+        let temp = TempDir::new().expect("tempdir");
+        let paths = test_paths(temp.path());
+        let bundles = [
+            temp.path().join("Applications").join("Claude.app"),
+            temp.path()
+                .join("home")
+                .join("Applications")
+                .join("Claude.app"),
+        ];
+
+        // 卸载后数据目录还在、应用包没了：不算装着（#9383）
+        fs::create_dir_all(paths.normal_config_path.parent().unwrap()).unwrap();
+        fs::create_dir_all(paths.threep_config_path.parent().unwrap()).unwrap();
+        assert!(!detect_installed(&paths, Some(&bundles)));
+
+        fs::create_dir_all(&bundles[1]).unwrap();
+        assert!(detect_installed(&paths, Some(&bundles)));
     }
 
     #[test]
@@ -2152,6 +2197,11 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|model| model.get("supports1m").is_none()));
+            assert_eq!(
+                models["data"][0]["description"],
+                json!(format!("{} · claude-sonnet-5", provider.name))
+            );
+            assert_eq!(profile["modelDiscoveryEnabled"], json!(true));
             assert_eq!(serde_json::to_value(&provider).unwrap(), before);
             assert!(direct_profile(&provider)
                 .expect("direct profile remains valid")
@@ -2294,10 +2344,42 @@ mod tests {
         let models = model_list_response(&provider).expect("model list");
         assert_eq!(models["data"][0]["id"], json!("claude-sonnet-4-6"));
         assert_eq!(models["data"][0]["supports1m"], json!(true));
+        // 不带说明 Desktop 会按 id 里的 sonnet 显示 Anthropic 的那句。
+        assert_eq!(
+            models["data"][0]["description"],
+            json!("Proxy · kimi-k2 · 1M")
+        );
 
         let err = map_proxy_request_model(json!({"model": "claude-opus-4-8"}), &provider)
             .expect_err("unknown route should fail");
         assert!(err.to_string().contains("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn claude_desktop_discovered_description_names_provider_and_upstream() {
+        assert_eq!(
+            discovered_model_description("DeepSeek", "deepseek-v4", false),
+            "DeepSeek · deepseek-v4"
+        );
+        assert_eq!(
+            discovered_model_description("Zhipu", "glm-5.2", true),
+            "Zhipu · glm-5.2 · 1M"
+        );
+        assert_eq!(
+            discovered_model_description(" ", "glm-5.2", false),
+            "glm-5.2"
+        );
+        assert_eq!(
+            discovered_model_description("Relay", "Claude-Opus-5", true),
+            "Relay · Claude-Opus-5 · 1M"
+        );
+        let long = "x".repeat(150);
+        assert_eq!(
+            discovered_model_description("Relay", &long, false)
+                .chars()
+                .count(),
+            MAX_MODEL_DESCRIPTION_CHARS
+        );
     }
 
     #[test]
@@ -2334,6 +2416,12 @@ mod tests {
         );
         let models = model_list_response(&provider).expect("model list");
         assert_eq!(models["data"][1]["id"], json!("claude-opus-5-5"));
+        // 上游就是 Claude 模型的留给 Desktop 自己说明，别家模型换成真正的模型名。
+        assert_eq!(
+            models["data"][1]["description"],
+            json!("Proxy · claude-opus-5.5")
+        );
+        assert_eq!(models["data"][2]["description"], json!("Proxy · glm-5"));
 
         // 新名字、旧 profile 里的原键、带日期的全名都落到同一个目标。
         for (requested, upstream) in [

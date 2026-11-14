@@ -27,7 +27,11 @@
     "setAsDefault": "设为默认",
     "removeAccount": "移除账号",
     "addOrReauth": "添加账号或重新登录",
-    "logoutAll": "移除所有账号"
+    "logoutAll": "移除所有账号",
+    "pluginVersion": "CodeAgent 插件版本",
+    "pluginVersionDescription": "仅保存在本机，所有华为账号共用。仅用于模型列表和额度查询，不影响推理、登录或已安装的 CLI。默认值：cli-1.2615.02.03。",
+    "pluginVersionSave": "保存",
+    "pluginVersionReset": "恢复默认"
   },
   "providerForm": {
     "presets": {

@@ -4,8 +4,6 @@ use serde_json::Value;
 use std::collections::BTreeSet;
 
 const CONTROL_API: &str = "https://codeagentcli.rnd.huawei.com/codeAgentPro";
-// Match the installed CodeAgent CLI's service protocol version.
-const PLUGIN_VERSION: &str = "cli-1.2605.05.01";
 
 async fn json_response(request: RequestBuilder, label: &str) -> Result<Value, AppError> {
     let response = request
@@ -53,6 +51,7 @@ pub(super) async fn fetch_models(
     client: &Client,
     token: &str,
 ) -> Result<Vec<FetchedModel>, AppError> {
+    let plugin_version = crate::settings::get_huawei_codeagent_plugin_version();
     let detail = user_detail(client, token).await?;
     let value = json_response(
         client
@@ -61,7 +60,7 @@ pub(super) async fn fetch_models(
             ))
             .header("x-auth-token", token)
             .header("Agent-Type", "AgentCenter")
-            .header("plugin-version", PLUGIN_VERSION)
+            .header("plugin-version", plugin_version)
             .header("area", area(&detail))
             .header(
                 "depart",
@@ -136,13 +135,14 @@ pub(super) async fn fetch_quota(
     token: &str,
     model_id: Option<&str>,
 ) -> Result<Value, AppError> {
+    let plugin_version = crate::settings::get_huawei_codeagent_plugin_version();
     let detail = user_detail(client, token).await?;
     let zone = if area(&detail) == "yellow" { "y" } else { "g" };
     let value = json_response(
         client
             .get(quota_url(zone, model_id)?)
             .header("x-auth-token", token)
-            .header("plugin-version", PLUGIN_VERSION)
+            .header("plugin-version", plugin_version)
             .header(
                 "depart",
                 detail["fullDepartmentNamePathUrlEncode"]

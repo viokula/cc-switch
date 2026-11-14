@@ -7,10 +7,9 @@ const QUERY_KEY = ["huawei-codeagent-2-accounts"];
 export function useHuaweiCodeAgentOauth() {
   const queryClient = useQueryClient();
 
-  const {
-    data: accounts = [],
-    isLoading: isLoadingAccounts,
-  } = useQuery<HuaweiCodeAgentAccount[]>({
+  const { data: accounts = [], isLoading: isLoadingAccounts } = useQuery<
+    HuaweiCodeAgentAccount[]
+  >({
     queryKey: QUERY_KEY,
     queryFn: () => huaweiCodeAgent2Api.listAccounts(),
     staleTime: 10_000,
@@ -33,12 +32,14 @@ export function useHuaweiCodeAgentOauth() {
   });
 
   const removeAccountMutation = useMutation({
-    mutationFn: (accountId: string) => huaweiCodeAgent2Api.removeAccount(accountId),
+    mutationFn: (accountId: string) =>
+      huaweiCodeAgent2Api.removeAccount(accountId),
     onSuccess: invalidate,
   });
 
   const setDefaultMutation = useMutation({
-    mutationFn: (accountId: string) => huaweiCodeAgent2Api.setDefaultAccount(accountId),
+    mutationFn: (accountId: string) =>
+      huaweiCodeAgent2Api.setDefaultAccount(accountId),
     onSuccess: invalidate,
   });
 

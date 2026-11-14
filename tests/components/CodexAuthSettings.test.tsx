@@ -50,19 +50,19 @@ async function renderWith(classic: boolean, onChange = vi.fn()) {
 
 describe("CodexAuthSettings classic sub-agent toggle", () => {
   beforeEach(() => {
-    forcesMultiAgentV2Mock.mockReset();
+    forcesMultiAgentV2Mock.mockReset().mockResolvedValue(false);
     getCompressionMock.mockResolvedValue(false);
     diskUsageMock.mockResolvedValue(0);
   });
 
-  // 开关挪到了 Codex 聚合页签的「聚合设置」（StackSettingsSheet），设置页不再显示
-  it("is no longer on the settings page", async () => {
-    await renderWith(true);
+  it("reflects and updates the classic sub-agent setting", async () => {
+    const onChange = await renderWith(true);
+    const toggle = screen.getByRole("switch", { name: LABEL });
 
-    expect(
-      screen.queryByRole("switch", { name: LABEL }),
-    ).not.toBeInTheDocument();
-    expect(forcesMultiAgentV2Mock).not.toHaveBeenCalled();
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(forcesMultiAgentV2Mock).toHaveBeenCalledTimes(1);
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledWith({ codexStackClassicTools: false });
   });
 });
 
@@ -131,5 +131,87 @@ describe("CodexAuthSettings session compression toggle", () => {
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
     expect(setCompressionMock).toHaveBeenCalledWith(true);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("CodexAuthSettings unified session history toggle", () => {
+  const UNIFY = "settings.unifyCodexSessionHistory";
+
+  beforeEach(() => {
+    getCompressionMock.mockResolvedValue(false);
+    diskUsageMock.mockResolvedValue(0);
+  });
+
+  async function renderUnify(enabled: boolean, migrateExisting?: boolean) {
+    const onChange = vi.fn().mockResolvedValue(true);
+    await act(async () => {
+      render(
+        <CodexAuthSettings
+          settings={
+            {
+              unifyCodexSessionHistory: enabled,
+              unifyCodexMigrateExisting: migrateExisting,
+            } as SettingsFormState
+          }
+          onChange={onChange}
+        />,
+      );
+    });
+    return onChange;
+  }
+
+  // 新版 Codex 会锁住留在官方组的会话：迁入仍由用户决定，但默认勾上
+  it("offers migrating existing sessions, checked by default", async () => {
+    const onChange = await renderUnify(false);
+
+    fireEvent.click(screen.getByRole("switch", { name: UNIFY }));
+    const checkbox = await screen.findByRole("checkbox");
+    expect(
+      screen.getByText("confirm.unifyCodexHistory.migrateExisting"),
+    ).toBeInTheDocument();
+    expect(checkbox).toBeChecked();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "confirm.unifyCodexHistory.confirm" }),
+    );
+    expect(onChange).toHaveBeenCalledWith({
+      unifyCodexSessionHistory: true,
+      unifyCodexMigrateExisting: true,
+    });
+  });
+
+  it("lets the user enable without migrating", async () => {
+    const onChange = await renderUnify(false);
+
+    fireEvent.click(screen.getByRole("switch", { name: UNIFY }));
+    fireEvent.click(await screen.findByRole("checkbox"));
+    fireEvent.click(
+      screen.getByRole("button", { name: "confirm.unifyCodexHistory.confirm" }),
+    );
+    expect(onChange).toHaveBeenCalledWith({
+      unifyCodexSessionHistory: true,
+      unifyCodexMigrateExisting: false,
+    });
+  });
+
+  it("offers restore when turning off after opting into migration", async () => {
+    await renderUnify(true, true);
+
+    fireEvent.click(screen.getByRole("switch", { name: UNIFY }));
+    expect(
+      await screen.findByText("confirm.unifyCodexHistoryOff.restoreBackup"),
+    ).toBeInTheDocument();
+  });
+
+  it("has nothing to restore when migration was never opted into", async () => {
+    await renderUnify(true, false);
+
+    fireEvent.click(screen.getByRole("switch", { name: UNIFY }));
+    expect(
+      await screen.findByText("confirm.unifyCodexHistoryOff.message"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("confirm.unifyCodexHistoryOff.restoreBackup"),
+    ).not.toBeInTheDocument();
   });
 });

@@ -197,6 +197,11 @@ interface ClaudeFormFieldsProps {
   onStackModelRowsChange?: (rows: ClaudeStackModelRow[]) => void;
 }
 
+/** 清空列表的 state 更新：已经是空的就原样返回，React 不会因此重渲染 */
+function keepEmpty<T>(prev: T[]): T[] {
+  return prev.length === 0 ? prev : [];
+}
+
 export function ClaudeFormFields({
   providerId,
   shouldShowApiKey,
@@ -419,7 +424,12 @@ export function ClaudeFormFields({
       .then((models) => {
         if (copilotModelsRequestRef.current !== requestId) return;
         setCopilotModels(models);
-        showModelFetchResult(models.length);
+        if (models.length === 0) {
+          // Copilot Free 账号的模型都不允许在模型选择器中使用，会被后端过滤成空
+          toast.info(t("copilot.noPickerModelsClaude"));
+        } else {
+          showModelFetchResult(models.length);
+        }
       })
       .catch((err) => {
         if (copilotModelsRequestRef.current !== requestId) return;
@@ -538,15 +548,16 @@ export function ClaudeFormFields({
       });
   }, [isXaiOauthAuthenticated, selectedXaiAccountId, showModelFetchResult, t]);
 
+  // 已经是空列表时保留原数组：挂载时新建的 [] 会让表单白白多渲染一轮
   useEffect(() => {
     copilotModelsRequestRef.current += 1;
-    setCopilotModels([]);
+    setCopilotModels(keepEmpty);
     setModelsLoading(false);
   }, [isCopilotPreset, isCopilotAuthenticated, selectedGitHubAccountId]);
 
   useEffect(() => {
     codexOauthModelsRequestRef.current += 1;
-    setCodexOauthModels([]);
+    setCodexOauthModels(keepEmpty);
     setCodexOauthModelsLoading(false);
   }, [isCodexOauthPreset, isCodexOauthAuthenticated, selectedCodexAccountId]);
 
@@ -558,7 +569,7 @@ export function ClaudeFormFields({
 
   useEffect(() => {
     xaiOauthModelsRequestRef.current += 1;
-    setXaiOauthModels([]);
+    setXaiOauthModels(keepEmpty);
     setXaiOauthModelsLoading(false);
   }, [isXaiOauthPreset, isXaiOauthAuthenticated, selectedXaiAccountId]);
 
@@ -698,7 +709,6 @@ export function ClaudeFormFields({
     modelField: ClaudeModelEnvField;
     displayNameField?: ClaudeModelEnvField;
     inputId: string;
-    supportsOneM?: boolean;
   };
 
   const modelRoleRows: ModelRoleRow[] = [
@@ -1354,19 +1364,17 @@ export function ClaudeFormFields({
                           setClaudeOneMMarker(value, usesOneM),
                         ),
                     )}
-                    {row.supportsOneM && (
-                      <label className="flex h-9 items-center gap-2 text-sm text-fg-2">
-                        <Checkbox
-                          checked={usesOneM}
-                          onCheckedChange={(checked) =>
-                            handleRoleOneMChange(row, checked === true)
-                          }
-                        />
-                        {t("providerForm.modelOneMLabel", {
-                          defaultValue: "1M",
-                        })}
-                      </label>
-                    )}
+                    <label className="flex h-9 items-center gap-2 text-sm text-fg-2">
+                      <Checkbox
+                        checked={usesOneM}
+                        onCheckedChange={(checked) =>
+                          handleRoleOneMChange(row, checked === true)
+                        }
+                      />
+                      {t("providerForm.modelOneMLabel", {
+                        defaultValue: "1M",
+                      })}
+                    </label>
                   </div>
                 );
               })}
